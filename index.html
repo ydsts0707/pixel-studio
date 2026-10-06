@@ -1353,10 +1353,17 @@
             setTimeout(() => URL.revokeObjectURL(url), 1000);
         }
 
-        // Tablet/phone: open the share sheet ("이미지 저장" puts it in the gallery).
-        // If sharing is not possible, show the picture so it can be saved by long-press.
+        // Android (Galaxy): download — the gallery shows it in the "Download" album.
+        //   (Android's share sheet has no "save to gallery" option.)
+        // iPhone/iPad: open the share sheet ("이미지 저장" puts it in Photos).
+        //   If sharing is not possible, show the picture so it can be saved by long-press.
         // Computer: download the file.
         async function saveImage(blob, filename, doneMessage) {
+            if (/Android/i.test(navigator.userAgent)) {
+                downloadBlob(blob, filename);
+                showToast(`${doneMessage} 갤러리 → 'Download' 앨범에서 볼 수 있어요.`);
+                return;
+            }
             const isTouchDevice = navigator.maxTouchPoints > 0;
             if (!isTouchDevice) {
                 downloadBlob(blob, filename);
