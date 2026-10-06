@@ -1,0 +1,1538 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>픽셀 애니메이션 스튜디오 Pro</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Jua & Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Jua&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Jua', 'Inter', sans-serif;
+            background-color: #f0fdf4;
+            /* 태블릿: 두 번 탭 확대 방지, 탭 하이라이트 제거 */
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button, label, select {
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #pixel-canvas {
+            touch-action: none;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none; /* 길게 누르면 뜨는 메뉴 방지 */
+        }
+        .pixel-cell {
+            position: relative;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: background-color 0.08s ease;
+        }
+        /* 따라그리기: 칠해야 할 색을 가운데 점으로 표시 */
+        .pixel-cell.guide::after {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 30%;
+            height: 30%;
+            transform: translate(-50%, -50%);
+            border-radius: 9999px;
+            background: var(--g);
+            box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
+        }
+        .pixelated {
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            object-fit: contain;
+        }
+        /* 저장 안내 창의 그림은 길게 눌러 저장할 수 있어야 함 */
+        #save-popup-img {
+            -webkit-touch-callout: default;
+            user-select: auto;
+            -webkit-user-select: auto;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-800 flex flex-col items-center p-3 sm:p-6">
+
+    <header class="text-center mb-5">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-emerald-600 drop-shadow-sm">
+            🎨 픽셀 애니메이션 스튜디오 Pro
+        </h1>
+        <p class="text-sm sm:text-base text-slate-600 mt-1">
+            자유롭게 그리거나, 도안을 따라 그리며 움직이는 픽셀 그림을 만들어요!
+        </p>
+    </header>
+
+    <!-- Main Container -->
+    <main class="w-full max-w-xl bg-white rounded-3xl shadow-xl p-4 sm:p-6 border border-emerald-100 flex flex-col gap-5">
+
+        <!-- 0. Mode Tabs -->
+        <section class="flex bg-emerald-50 p-1.5 rounded-2xl gap-1.5 border border-emerald-100">
+            <button id="tab-free" onclick="switchMode('free')" class="flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition">
+                ✏️ 자유그리기
+            </button>
+            <button id="tab-trace" onclick="switchMode('trace')" class="flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition">
+                🖌️ 따라그리기
+            </button>
+        </section>
+
+        <!-- 1. Screen (grid) Size Selector -->
+        <section class="bg-emerald-50/60 p-3.5 rounded-2xl border border-emerald-100 flex flex-col gap-2">
+            <div class="flex items-center justify-between">
+                <span class="text-sm sm:text-base font-bold text-emerald-800">🔲 화면 크기:</span>
+                <span id="current-grid-badge" class="text-xs bg-emerald-600 text-white px-2 py-0.5 rounded-full font-sans">16 x 16</span>
+            </div>
+            <div id="grid-size-buttons" class="grid grid-cols-6 gap-1.5 sm:gap-2">
+                <!-- Buttons injected via JS -->
+            </div>
+        </section>
+
+        <!-- 2. Trace Mode Panel: Upload & Progress -->
+        <section id="trace-panel" class="hidden bg-amber-50/60 p-3.5 rounded-2xl border border-amber-100 flex flex-col gap-2.5">
+            <label for="image-upload-input" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 px-4 rounded-xl text-center text-sm shadow-sm cursor-pointer transition">
+                📁 도안 올리기 (움직이는 사진도 OK)
+            </label>
+            <input type="file" id="image-upload-input" accept="image/*" class="hidden" onchange="handleImageUpload(event)">
+
+            <p id="trace-empty" class="text-xs text-amber-800 text-center leading-relaxed">
+                격자가 그려진 도안을 올리면 칸 수와 색을 자동으로 찾아 흐리게 깔아 줘요.<br>
+                움직이는 사진(GIF)을 올리면 장면마다 도안이 깔려요.
+            </p>
+
+            <!-- Progress -->
+            <div id="trace-progress" class="hidden flex-col gap-1.5 pt-2 border-t border-amber-200/60">
+                <div class="flex items-center justify-between gap-2 text-xs font-bold text-amber-900">
+                    <span id="trace-progress-text">따라그리기 진행: 0 / 0칸</span>
+                    <button onclick="fillFromGuide()" class="text-amber-700 hover:text-amber-900 underline underline-offset-2 whitespace-nowrap">
+                        도안 색 그대로 채우기
+                    </button>
+                </div>
+                <div class="h-2.5 bg-amber-100 rounded-full overflow-hidden">
+                    <div id="trace-progress-bar" class="h-full bg-amber-500 rounded-full transition-all duration-200" style="width: 0%"></div>
+                </div>
+                <p class="text-[11px] text-amber-700/80">흐린 칸 가운데 점과 같은 색으로 칠해 보세요. 다른 색으로 칠하면 점이 계속 보여요!</p>
+            </div>
+        </section>
+
+        <!-- 3. Scene (frame) Manager -->
+        <section class="flex items-center gap-2 bg-slate-50 p-2.5 rounded-2xl border border-slate-200">
+            <div id="frame-tabs" class="flex-1 min-w-0 flex items-center gap-1.5 overflow-x-auto py-1">
+                <!-- Scene chips injected via JS -->
+            </div>
+            <button onclick="addNewFrame()" title="지금 장면을 복사해서 다음 장면을 만들어요" class="bg-sky-500 hover:bg-sky-600 text-white text-xs sm:text-sm font-bold py-2 px-3 rounded-xl shadow-sm transition whitespace-nowrap shrink-0">
+                ➕ 장면
+            </button>
+            <div class="flex flex-col items-center gap-1 shrink-0" title="움직임 미리보기">
+                <canvas id="preview-canvas" width="16" height="16" class="pixelated w-11 h-11 rounded-lg border-2 border-sky-400 bg-white"></canvas>
+                <select id="speed-select" onchange="changeSpeed(this.value)" class="text-[10px] bg-white border border-slate-200 rounded-md px-0.5 py-0.5 font-sans">
+                    <option value="500">느리게</option>
+                    <option value="300" selected>보통</option>
+                    <option value="150">빠르게</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- 4. Interactive Drawing Canvas Area -->
+        <section class="flex flex-col items-center justify-center bg-slate-100 p-4 rounded-3xl border border-slate-200 shadow-inner">
+            <div id="pixel-canvas" class="w-full shadow-md rounded-xl overflow-hidden border border-slate-300 grid gap-[1px] bg-slate-300">
+                <!-- Pixel cells injected via JS -->
+            </div>
+        </section>
+
+        <!-- 5. Color Palette -->
+        <section class="flex flex-col gap-2">
+            <div class="flex items-center justify-between text-xs sm:text-sm font-bold text-slate-700 px-1">
+                <span>🖍️ 색연필 팔레트</span>
+                <span id="selected-color-label" class="text-emerald-600 font-extrabold">선택된 색: 빨강</span>
+            </div>
+            <div id="design-palette-wrap" class="hidden flex-col gap-1.5 bg-amber-50 p-2.5 rounded-2xl border border-amber-200">
+                <span class="text-xs font-bold text-amber-800">도안 색</span>
+                <div id="design-palette" class="grid grid-cols-10 gap-1.5"></div>
+            </div>
+            <div class="flex flex-col gap-1.5 bg-slate-50 p-2.5 rounded-2xl border border-slate-200">
+                <span class="text-xs font-bold text-slate-500">기본 10색</span>
+                <div id="color-palette" class="grid grid-cols-10 gap-1.5"></div>
+            </div>
+        </section>
+
+        <!-- 6. Tools -->
+        <section class="grid grid-cols-4 gap-2 pt-1">
+            <button onclick="setEraser()" id="eraser-btn" class="font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition">
+                🧽 지우개
+            </button>
+            <button onclick="undo()" id="undo-btn" title="되돌리기 (Ctrl+Z)" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
+                ↩️ 되돌리기
+            </button>
+            <button onclick="redo()" id="redo-btn" title="다시하기 (Ctrl+Y)" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
+                ↪️ 다시하기
+            </button>
+            <button onclick="clearCanvas()" title="지금 장면과 도안을 모두 지워요" class="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition">
+                🗑️ 비우기
+            </button>
+        </section>
+
+        <!-- 7. Save -->
+        <section class="grid grid-cols-2 gap-2">
+            <button onclick="savePNG()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-2 rounded-xl text-sm shadow-sm transition">
+                📷 사진 저장 (지금 장면)
+            </button>
+            <button onclick="saveGIF()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-2 rounded-xl text-sm shadow-sm transition">
+                🎬 움직이는 사진 저장
+            </button>
+        </section>
+
+    </main>
+
+    <!-- Save popup (for tablets that cannot open the share sheet) -->
+    <div id="save-popup" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" onclick="if (event.target === this) closeSavePopup()">
+        <div class="bg-white rounded-3xl shadow-2xl p-5 w-full max-w-sm flex flex-col items-center gap-3 text-center">
+            <h3 class="text-lg font-bold text-slate-800">📥 갤러리에 저장하기</h3>
+            <img id="save-popup-img" alt="저장할 그림" class="w-56 h-56 object-contain rounded-xl border border-slate-200 bg-white">
+            <p class="text-sm text-slate-600 leading-relaxed">
+                그림을 <b>꾹 길게 눌러</b> <b>'사진에 저장'</b> 또는 <b>'이미지 저장'</b>을 누르세요.
+            </p>
+            <div class="grid grid-cols-2 gap-2 w-full">
+                <button id="save-popup-download" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-sm">파일로 저장</button>
+                <button onclick="closeSavePopup()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2.5 rounded-xl text-sm">닫기</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Hidden canvas for image processing -->
+    <canvas id="processing-canvas" class="hidden"></canvas>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        // --- Constants ---
+        const PALETTE = [
+            { name: '빨강', hex: '#ef4444' },
+            { name: '주황', hex: '#f97316' },
+            { name: '노랑', hex: '#eab308' },
+            { name: '연두', hex: '#84cc16' },
+            { name: '초록', hex: '#10b981' },
+            { name: '파랑', hex: '#3b82f6' },
+            { name: '남색', hex: '#6366f1' },
+            { name: '보라', hex: '#a855f7' },
+            { name: '갈색', hex: '#854d0e' },
+            { name: '검정', hex: '#1e293b' }
+        ];
+        const EMPTY_HEX = '#ffffff';
+        const GRID_SIZES = [6, 8, 10, 12, 14, 16];
+        const MAX_DETECTED_SIZE = 32;
+        const MAX_DESIGN_COLORS = 12;
+        const MAX_FRAMES = 8;
+        const MAX_HISTORY = 50;
+        const CANVAS_MAX_PX = 360;
+
+        // --- App State ---
+        // (code calls a scene a "frame")
+        let gridW = 16;
+        let gridH = 16;
+        let mode = 'free';              // 'free' | 'trace'
+        let frames = [];                // frames[frameIdx][row][col] = hex or null
+        let currentFrameIndex = 0;
+
+        let selectedColor = PALETTE[0].hex;
+        let selectedColorName = PALETTE[0].name;
+        let isEraserActive = false;
+
+        // Trace guides (도안). guideBases are kept at the detected size;
+        // guides are the same grids resized to the current screen size.
+        let guideBases = [];
+        let guides = [];
+        let guidePerScene = false;      // true: one guide per scene (animated GIF), false: one guide for all scenes
+        let designColors = [];          // colors found in the uploaded design
+        let traceCompleted = false;
+
+        let undoStack = [];
+        let redoStack = [];
+        let pendingSnapshot = null;     // snapshot taken at stroke start
+        let isDrawing = false;
+        let strokeChanged = false;
+        let lastCell = null;
+
+        let frameDelay = 300;           // ms per scene (preview & GIF)
+        let previewTimer = null;
+        let previewIdx = 0;
+        let frameTipShown = false;
+        let savePopupUrl = null;
+
+        // --- Initialization ---
+        window.onload = function() {
+            frames = [createEmptyGrid(gridW, gridH)];
+            initGridSizeButtons();
+            initPalette();
+            bindCanvasEvents();
+            bindKeyboard();
+            switchMode('free');
+            renderFramesTabs();
+            updateUndoButtons();
+            startPreview();
+        };
+
+        // --- Grid helpers ---
+        function createEmptyGrid(w, h) {
+            return Array.from({ length: h }, () => Array(w).fill(null));
+        }
+
+        function cloneGrid(grid) {
+            return grid.map(row => row.slice());
+        }
+
+        function isGridEmpty(grid) {
+            return grid.every(row => row.every(cell => !cell));
+        }
+
+        // Nearest-neighbour resample using each new cell's center
+        function resampleGrid(oldGrid, newW, newH) {
+            const oldH = oldGrid.length, oldW = oldGrid[0].length;
+            if (oldW === newW && oldH === newH) return cloneGrid(oldGrid);
+            const newGrid = createEmptyGrid(newW, newH);
+            for (let r = 0; r < newH; r++) {
+                const or = Math.min(oldH - 1, Math.floor((r + 0.5) * oldH / newH));
+                for (let c = 0; c < newW; c++) {
+                    const oc = Math.min(oldW - 1, Math.floor((c + 0.5) * oldW / newW));
+                    newGrid[r][c] = oldGrid[or][oc];
+                }
+            }
+            return newGrid;
+        }
+
+        function hexToRgb(hex) {
+            return [
+                parseInt(hex.substr(1, 2), 16),
+                parseInt(hex.substr(3, 2), 16),
+                parseInt(hex.substr(5, 2), 16)
+            ];
+        }
+
+        function rgbToHex(r, g, b) {
+            return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+        }
+
+        // Mix a color with white (amount = how much of the color remains)
+        function tint(hex, amount) {
+            const [r, g, b] = hexToRgb(hex);
+            const mix = v => Math.round(255 - (255 - v) * amount);
+            return `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`;
+        }
+
+        // "redmean" weighted distance: closer to how people see color
+        function colorDistance(r1, g1, b1, r2, g2, b2) {
+            const rMean = (r1 + r2) / 2;
+            const dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+            return Math.sqrt((2 + rMean / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rMean) / 256) * db * db);
+        }
+
+        function closestPaletteIndex(r, g, b) {
+            let best = 0, bestDist = Infinity;
+            PALETTE.forEach((p, i) => {
+                const [pr, pg, pb] = hexToRgb(p.hex);
+                const dist = colorDistance(r, g, b, pr, pg, pb);
+                if (dist < bestDist) { bestDist = dist; best = i; }
+            });
+            return best;
+        }
+
+        // --- Mode ---
+        function switchMode(newMode) {
+            mode = newMode;
+            const base = 'flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition';
+            document.getElementById('tab-free').className = `${base} ${mode === 'free' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`;
+            document.getElementById('tab-trace').className = `${base} ${mode === 'trace' ? 'bg-white shadow-sm text-amber-600' : 'text-slate-500 hover:text-slate-700'}`;
+            document.getElementById('trace-panel').classList.toggle('hidden', mode !== 'trace');
+            renderDesignPalette();
+            renderCanvas();
+            traceCompleted = isCurrentSceneComplete();
+            updateTracePanel();
+        }
+
+        // --- Screen (grid) Size ---
+        function initGridSizeButtons() {
+            const container = document.getElementById('grid-size-buttons');
+            container.innerHTML = '';
+            GRID_SIZES.forEach(sz => {
+                const isActive = gridW === sz && gridH === sz;
+                const btn = document.createElement('button');
+                btn.className = `py-1.5 rounded-xl text-xs sm:text-sm font-bold border transition ${isActive ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-100'}`;
+                btn.innerText = `${sz}x${sz}`;
+                btn.onclick = () => changeGridSize(sz, sz);
+                container.appendChild(btn);
+            });
+            document.getElementById('current-grid-badge').innerText = `${gridW} x ${gridH}`;
+        }
+
+        function changeGridSize(newW, newH) {
+            if (newW === gridW && newH === gridH) return;
+            const snap = snapshot();
+            const hadDrawing = frames.some(f => !isGridEmpty(f));
+
+            setGridSize(newW, newH);
+            commit(snap);
+            renderAll();
+            if (hadDrawing) {
+                showToast('그림을 새 화면 크기에 맞게 옮겼어요. 마음에 안 들면 되돌리기!');
+            }
+        }
+
+        // Resize scenes + guides (no history; callers handle undo)
+        function setGridSize(newW, newH) {
+            frames = frames.map(f => resampleGrid(f, newW, newH));
+            gridW = newW;
+            gridH = newH;
+            refreshGuideSize();
+            initGridSizeButtons();
+        }
+
+        function refreshGuideSize() {
+            guides = guideBases.map(g => g ? resampleGrid(g, gridW, gridH) : null);
+            traceCompleted = false;
+        }
+
+        // Guide for a scene (null if none)
+        function guideFor(index) {
+            if (guides.length === 0) return null;
+            return guidePerScene ? (guides[index] || null) : guides[0];
+        }
+
+        function hasAnyGuide() {
+            return guides.some(Boolean);
+        }
+
+        // --- Palette & Tools ---
+        function makeSwatch(hex, name) {
+            const btn = document.createElement('button');
+            btn.style.backgroundColor = hex;
+            btn.title = name;
+            btn.dataset.hex = hex;
+            btn.onclick = () => selectColor(hex, name);
+            return btn;
+        }
+
+        function initPalette() {
+            const container = document.getElementById('color-palette');
+            container.innerHTML = '';
+            PALETTE.forEach(item => container.appendChild(makeSwatch(item.hex, item.name)));
+            updateToolUI();
+        }
+
+        function renderDesignPalette() {
+            const wrap = document.getElementById('design-palette-wrap');
+            const container = document.getElementById('design-palette');
+            container.innerHTML = '';
+            const show = mode === 'trace' && designColors.length > 0;
+            wrap.classList.toggle('hidden', !show);
+            wrap.classList.toggle('flex', show);
+            designColors.forEach((hex, i) => container.appendChild(makeSwatch(hex, `도안 색 ${i + 1}`)));
+            updateToolUI();
+        }
+
+        function selectColor(hex, name) {
+            isEraserActive = false;
+            selectedColor = hex;
+            selectedColorName = name;
+            updateToolUI();
+        }
+
+        function setEraser() {
+            isEraserActive = true;
+            updateToolUI();
+        }
+
+        function updateToolUI() {
+            const swatches = document.querySelectorAll('#color-palette button, #design-palette button');
+            swatches.forEach(btn => {
+                const isSelected = !isEraserActive && btn.dataset.hex === selectedColor;
+                btn.className = `w-full aspect-square rounded-xl border-2 transition shadow-sm ${isSelected ? 'border-slate-800 scale-110' : 'border-black/5 hover:scale-105'}`;
+            });
+            document.getElementById('eraser-btn').className = isEraserActive
+                ? 'bg-slate-700 text-white font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition ring-2 ring-slate-400'
+                : 'bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition';
+            document.getElementById('selected-color-label').innerText = isEraserActive
+                ? '선택된 도구: 지우개'
+                : `선택된 색: ${selectedColorName}`;
+        }
+
+        // --- Canvas Rendering ---
+        function renderAll() {
+            renderFramesTabs();
+            renderCanvas();
+            updateTracePanel();
+            updateUndoButtons();
+        }
+
+        function renderCanvas() {
+            const canvasEl = document.getElementById('pixel-canvas');
+            canvasEl.style.gridTemplateColumns = `repeat(${gridW}, minmax(0, 1fr))`;
+            canvasEl.style.gridTemplateRows = `repeat(${gridH}, minmax(0, 1fr))`;
+            canvasEl.style.aspectRatio = `${gridW} / ${gridH}`;
+            canvasEl.style.maxWidth = `${Math.round(CANVAS_MAX_PX * Math.min(1, gridW / gridH))}px`;
+
+            const frag = document.createDocumentFragment();
+            for (let r = 0; r < gridH; r++) {
+                for (let c = 0; c < gridW; c++) {
+                    const cell = document.createElement('div');
+                    cell.className = 'pixel-cell';
+                    cell.dataset.r = r;
+                    cell.dataset.c = c;
+                    refreshCell(cell, r, c);
+                    frag.appendChild(cell);
+                }
+            }
+            canvasEl.replaceChildren(frag);
+        }
+
+        function refreshCell(el, r, c) {
+            const color = frames[currentFrameIndex][r][c];
+            const guide = mode === 'trace' ? guideFor(currentFrameIndex) : null;
+            const target = guide ? guide[r][c] : null;
+
+            if (color) {
+                el.style.backgroundColor = color;
+            } else if (target) {
+                el.style.backgroundColor = tint(target, 0.28);
+            } else {
+                el.style.backgroundColor = EMPTY_HEX;
+            }
+            // Show the target color dot until the cell has the right color
+            const showDot = !!target && color !== target;
+            el.classList.toggle('guide', showDot);
+            if (showDot) el.style.setProperty('--g', target);
+        }
+
+        function getCellEl(r, c) {
+            return document.getElementById('pixel-canvas').children[r * gridW + c];
+        }
+
+        // --- Drawing (pointer events: mouse, touch, pen) ---
+        function bindCanvasEvents() {
+            const canvasEl = document.getElementById('pixel-canvas');
+
+            canvasEl.addEventListener('pointerdown', (e) => {
+                const cell = e.target.closest('.pixel-cell');
+                if (!cell) return;
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                e.preventDefault();
+                beginStroke();
+                const r = +cell.dataset.r, c = +cell.dataset.c;
+                applyColor(r, c);
+                lastCell = [r, c];
+            });
+
+            window.addEventListener('pointermove', (e) => {
+                if (!isDrawing) return;
+                const el = document.elementFromPoint(e.clientX, e.clientY);
+                const cell = el && el.closest ? el.closest('.pixel-cell') : null;
+                if (!cell || !canvasEl.contains(cell)) return;
+                const r = +cell.dataset.r, c = +cell.dataset.c;
+                // Fill the gap between cells when the pointer moves fast
+                if (lastCell) {
+                    drawLine(lastCell[0], lastCell[1], r, c, applyColor);
+                } else {
+                    applyColor(r, c);
+                }
+                lastCell = [r, c];
+            });
+
+            window.addEventListener('pointerup', endStroke);
+            window.addEventListener('pointercancel', endStroke);
+            canvasEl.addEventListener('contextmenu', (e) => e.preventDefault());
+        }
+
+        function drawLine(r0, c0, r1, c1, fn) {
+            const dx = Math.abs(c1 - c0), dy = -Math.abs(r1 - r0);
+            const sx = c0 < c1 ? 1 : -1, sy = r0 < r1 ? 1 : -1;
+            let err = dx + dy;
+            while (true) {
+                fn(r0, c0);
+                if (r0 === r1 && c0 === c1) break;
+                const e2 = 2 * err;
+                if (e2 >= dy) { err += dy; c0 += sx; }
+                if (e2 <= dx) { err += dx; r0 += sy; }
+            }
+        }
+
+        function beginStroke() {
+            pendingSnapshot = snapshot();
+            isDrawing = true;
+            strokeChanged = false;
+        }
+
+        function endStroke() {
+            if (!isDrawing) return;
+            isDrawing = false;
+            lastCell = null;
+            if (strokeChanged) {
+                commit(pendingSnapshot);
+                updateFrameThumbnail(currentFrameIndex);
+            }
+            pendingSnapshot = null;
+        }
+
+        function applyColor(r, c) {
+            const value = isEraserActive ? null : selectedColor;
+            if (frames[currentFrameIndex][r][c] === value) return;
+            frames[currentFrameIndex][r][c] = value;
+            strokeChanged = true;
+            refreshCell(getCellEl(r, c), r, c);
+            if (mode === 'trace') updateTracePanel();
+        }
+
+        // 비우기: clears the current scene AND removes the 도안, so the screen is all white
+        function clearCanvas() {
+            const hadGuide = guideBases.length > 0;
+            if (isGridEmpty(frames[currentFrameIndex]) && !hadGuide) {
+                showToast('이미 비어 있어요!');
+                return;
+            }
+            const snap = snapshot();
+            frames[currentFrameIndex] = createEmptyGrid(gridW, gridH);
+            if (hadGuide) {
+                if (designColors.includes(selectedColor)) selectColor(PALETTE[0].hex, PALETTE[0].name);
+                guideBases = [];
+                guidePerScene = false;
+                designColors = [];
+                refreshGuideSize();
+                renderDesignPalette();
+            }
+            commit(snap);
+            renderAll();
+            showToast(hadGuide
+                ? '도안까지 모두 지웠어요. 다시 하려면 도안을 올려 주세요. (되돌리기 가능)'
+                : '깨끗하게 비웠어요! (되돌리기 가능)');
+        }
+
+        // --- Undo / Redo ---
+        function snapshot() {
+            return {
+                gridW,
+                gridH,
+                currentFrameIndex,
+                frames: frames.map(cloneGrid),
+                // guide grids are never modified in place, so sharing references is safe
+                guideBases: guideBases.slice(),
+                guidePerScene,
+                designColors: designColors.slice()
+            };
+        }
+
+        function commit(snap) {
+            undoStack.push(snap);
+            if (undoStack.length > MAX_HISTORY) undoStack.shift();
+            redoStack = [];
+            updateUndoButtons();
+        }
+
+        function restore(snap) {
+            const sizeChanged = snap.gridW !== gridW || snap.gridH !== gridH;
+            gridW = snap.gridW;
+            gridH = snap.gridH;
+            frames = snap.frames.map(cloneGrid);
+            currentFrameIndex = Math.min(snap.currentFrameIndex, frames.length - 1);
+            guideBases = snap.guideBases.slice();
+            guidePerScene = snap.guidePerScene;
+            designColors = snap.designColors.slice();
+            if (sizeChanged) initGridSizeButtons();
+            refreshGuideSize();
+            traceCompleted = isCurrentSceneComplete();
+            renderDesignPalette();
+            renderAll();
+        }
+
+        function undo() {
+            if (isDrawing || undoStack.length === 0) return;
+            redoStack.push(snapshot());
+            restore(undoStack.pop());
+        }
+
+        function redo() {
+            if (isDrawing || redoStack.length === 0) return;
+            undoStack.push(snapshot());
+            restore(redoStack.pop());
+        }
+
+        function updateUndoButtons() {
+            document.getElementById('undo-btn').disabled = undoStack.length === 0;
+            document.getElementById('redo-btn').disabled = redoStack.length === 0;
+        }
+
+        function bindKeyboard() {
+            window.addEventListener('keydown', (e) => {
+                if (!(e.ctrlKey || e.metaKey)) return;
+                const key = e.key.toLowerCase();
+                if (key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+                else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+            });
+        }
+
+        // --- Scene (frame) Management ---
+        function addNewFrame() {
+            if (frames.length >= MAX_FRAMES) {
+                showToast(`최대 ${MAX_FRAMES}장면까지 만들 수 있어요.`);
+                return;
+            }
+            const snap = snapshot();
+            const insertAt = currentFrameIndex + 1;
+            // Copy the current scene so the next pose can be made by small changes
+            frames.splice(insertAt, 0, cloneGrid(frames[currentFrameIndex]));
+            // Per-scene guides follow their scenes; the new scene gets the same guide
+            if (guidePerScene && insertAt <= guideBases.length) {
+                guideBases.splice(insertAt, 0, guideBases[currentFrameIndex] || null);
+                refreshGuideSize();
+            }
+            currentFrameIndex = insertAt;
+            commit(snap);
+            traceCompleted = isCurrentSceneComplete();
+            renderAll();
+            if (!frameTipShown) {
+                frameTipShown = true;
+                showToast('지금 그림을 복사했어요. 조금씩 바꿔서 움직이게 만들어 보세요!');
+            }
+        }
+
+        function selectFrame(index) {
+            currentFrameIndex = index;
+            traceCompleted = isCurrentSceneComplete();
+            renderFramesTabs();
+            renderCanvas();
+            updateTracePanel();
+        }
+
+        function deleteFrame(index, e) {
+            e.stopPropagation();
+            if (frames.length <= 1) {
+                showToast('최소 1개의 장면은 있어야 해요.');
+                return;
+            }
+            const snap = snapshot();
+            frames.splice(index, 1);
+            if (guidePerScene && index < guideBases.length) {
+                guideBases.splice(index, 1);
+                refreshGuideSize();
+            }
+            if (currentFrameIndex > index || currentFrameIndex >= frames.length) {
+                currentFrameIndex = Math.max(0, currentFrameIndex - 1);
+            }
+            commit(snap);
+            traceCompleted = isCurrentSceneComplete();
+            renderAll();
+        }
+
+        function renderFramesTabs() {
+            const tabsContainer = document.getElementById('frame-tabs');
+            tabsContainer.innerHTML = '';
+            frames.forEach((_, idx) => {
+                const isActive = idx === currentFrameIndex;
+                const tab = document.createElement('div');
+                tab.className = `flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-xl border text-xs font-bold cursor-pointer transition whitespace-nowrap ${isActive ? 'bg-sky-500 text-white border-sky-500 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-sky-50'}`;
+                tab.title = `${idx + 1}장면`;
+                tab.onclick = () => selectFrame(idx);
+
+                const thumb = document.createElement('canvas');
+                thumb.id = `thumb-${idx}`;
+                thumb.className = 'pixelated w-6 h-6 rounded bg-white border border-slate-200';
+                tab.appendChild(thumb);
+
+                const label = document.createElement('span');
+                label.innerText = `${idx + 1}번`;
+                tab.appendChild(label);
+
+                if (frames.length > 1) {
+                    const delBtn = document.createElement('span');
+                    delBtn.innerText = '✕';
+                    delBtn.className = 'px-1 rounded-full hover:bg-black/10';
+                    delBtn.title = '장면 삭제';
+                    delBtn.onclick = (e) => deleteFrame(idx, e);
+                    tab.appendChild(delBtn);
+                }
+
+                tabsContainer.appendChild(tab);
+                updateFrameThumbnail(idx);
+            });
+            const activeTab = tabsContainer.children[currentFrameIndex];
+            if (activeTab) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+        }
+
+        function updateFrameThumbnail(index) {
+            const thumb = document.getElementById(`thumb-${index}`);
+            if (!thumb || !frames[index]) return;
+            thumb.width = gridW;
+            thumb.height = gridH;
+            drawGridToCanvas(thumb.getContext('2d'), frames[index], 1);
+        }
+
+        // --- Live Preview ---
+        function startPreview() {
+            if (previewTimer) clearInterval(previewTimer);
+            const canvas = document.getElementById('preview-canvas');
+            const tick = () => {
+                if (previewIdx >= frames.length) previewIdx = 0;
+                canvas.width = gridW;
+                canvas.height = gridH;
+                drawGridToCanvas(canvas.getContext('2d'), frames[previewIdx], 1);
+                previewIdx++;
+            };
+            tick();
+            previewTimer = setInterval(tick, frameDelay);
+        }
+
+        function changeSpeed(value) {
+            frameDelay = parseInt(value, 10);
+            startPreview();
+        }
+
+        // --- Trace (따라그리기) ---
+        function fillFromGuide() {
+            const guide = guideFor(currentFrameIndex);
+            if (!guide) {
+                showToast('이 장면에는 도안이 없어요.');
+                return;
+            }
+            const snap = snapshot();
+            frames[currentFrameIndex] = cloneGrid(guide);
+            commit(snap);
+            traceCompleted = true; // filled automatically, so skip the celebration
+            renderCanvas();
+            updateFrameThumbnail(currentFrameIndex);
+            updateTracePanel();
+            showToast('도안 색을 그대로 채웠어요. 되돌리기로 취소할 수 있어요.');
+        }
+
+        function sceneProgress(index) {
+            const guide = guideFor(index);
+            if (!guide) return null;
+            const grid = frames[index];
+            let total = 0, done = 0;
+            for (let r = 0; r < gridH; r++) {
+                for (let c = 0; c < gridW; c++) {
+                    if (!guide[r][c]) continue;
+                    total++;
+                    if (grid[r][c] === guide[r][c]) done++;
+                }
+            }
+            return { total, done };
+        }
+
+        function isCurrentSceneComplete() {
+            const p = sceneProgress(currentFrameIndex);
+            return !!p && p.total > 0 && p.done === p.total;
+        }
+
+        function updateTracePanel() {
+            const progressEl = document.getElementById('trace-progress');
+            const anyGuide = hasAnyGuide();
+            document.getElementById('trace-empty').classList.toggle('hidden', anyGuide);
+            progressEl.classList.toggle('hidden', !anyGuide);
+            progressEl.classList.toggle('flex', anyGuide);
+            if (!anyGuide) return;
+
+            const textEl = document.getElementById('trace-progress-text');
+            const barEl = document.getElementById('trace-progress-bar');
+            const p = sceneProgress(currentFrameIndex);
+            const prefix = guidePerScene ? `${currentFrameIndex + 1}장면 따라그리기` : '따라그리기 진행';
+            if (!p) {
+                textEl.innerText = `${currentFrameIndex + 1}장면에는 도안이 없어요`;
+                barEl.style.width = '0%';
+                return;
+            }
+            const pct = p.total ? Math.round(p.done / p.total * 100) : 0;
+            textEl.innerText = `${prefix}: ${p.done} / ${p.total}칸 (${pct}%)`;
+            barEl.style.width = `${pct}%`;
+
+            if (p.total > 0 && p.done === p.total) {
+                if (!traceCompleted && mode === 'trace') {
+                    traceCompleted = true;
+                    celebrate();
+                }
+            } else {
+                traceCompleted = false;
+            }
+        }
+
+        function celebrate() {
+            if (!guidePerScene) {
+                showToast('🎉 도안 따라그리기 완성! 정말 잘했어요!');
+                return;
+            }
+            const remaining = [];
+            frames.forEach((_, i) => {
+                const p = sceneProgress(i);
+                if (p && p.total > 0 && p.done < p.total) remaining.push(i + 1);
+            });
+            showToast(remaining.length === 0
+                ? '🎉 모든 장면 완성! 움직이는 사진으로 저장해 보세요!'
+                : `🎉 ${currentFrameIndex + 1}장면 완성! 다음은 ${remaining[0]}장면이에요.`);
+        }
+
+        // --- Design Upload ---
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            event.target.value = ''; // allow re-uploading the same file
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                const bytes = new Uint8Array(reader.result);
+                const isGif = bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46; // "GIF"
+                if (isGif) {
+                    try {
+                        const gif = decodeGIF(bytes);
+                        if (gif.frames.length > 0) {
+                            applyDesign(gif.frames.map(f => frameToCanvas(f, gif.width, gif.height)));
+                            return;
+                        }
+                    } catch (err) {
+                        // Fall back to the browser's decoder (first scene only)
+                    }
+                }
+                const url = URL.createObjectURL(file);
+                const img = new Image();
+                img.onload = () => { URL.revokeObjectURL(url); applyDesign([img]); };
+                img.onerror = () => { URL.revokeObjectURL(url); showToast('이미지를 열 수 없어요.'); };
+                img.src = url;
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function frameToCanvas(rgba, w, h) {
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            canvas.getContext('2d').putImageData(new ImageData(rgba, w, h), 0, 0);
+            return canvas;
+        }
+
+        // sources: one image, or one canvas per scene of an animated GIF
+        function applyDesign(sources) {
+            let truncated = false;
+            if (sources.length > MAX_FRAMES) {
+                sources = sources.slice(0, MAX_FRAMES);
+                truncated = true;
+            }
+            const result = analyzeDesign(sources);
+            if (result.grids.every(isGridEmpty)) {
+                showToast('색칠된 칸을 찾지 못했어요. 더 선명한 도안을 올려 주세요.');
+                return;
+            }
+
+            const snap = snapshot();
+            guideBases = result.grids;
+            guidePerScene = result.grids.length > 1;
+            designColors = result.colors;
+
+            if (result.w !== gridW || result.h !== gridH) {
+                setGridSize(result.w, result.h);
+            } else {
+                refreshGuideSize();
+            }
+            if (guidePerScene) {
+                // One scene per design scene
+                while (frames.length < guideBases.length) frames.push(createEmptyGrid(gridW, gridH));
+                currentFrameIndex = 0;
+            }
+            commit(snap);
+
+            if (designColors.length) selectColor(designColors[0], '도안 색 1');
+            traceCompleted = isCurrentSceneComplete();
+            renderDesignPalette();
+            renderAll();
+
+            let msg;
+            if (guidePerScene) {
+                msg = `${guideBases.length}장면짜리 움직이는 도안을 찾았어요! 장면마다 따라 그려 보세요.`;
+                if (truncated) msg += ` (최대 ${MAX_FRAMES}장면까지만 불러왔어요)`;
+            } else if (result.detected) {
+                msg = `${result.w}×${result.h} 도안을 찾았어요! 흐린 칸 위에 따라 그려 보세요.`;
+            } else {
+                msg = `격자선을 찾지 못해서 그림 전체를 ${result.w}×${result.h}칸으로 나눴어요.`;
+            }
+            showToast(msg);
+        }
+
+        // Read the pixels of an image/canvas (downscaled, on white so transparency = paper)
+        function readImagePixels(src) {
+            const MAX_SIDE = 1000;
+            const scale = Math.min(1, MAX_SIDE / Math.max(src.width, src.height));
+            const w = Math.max(1, Math.round(src.width * scale));
+            const h = Math.max(1, Math.round(src.height * scale));
+            const canvas = document.getElementById('processing-canvas');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            canvas.width = w;
+            canvas.height = h;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, w, h);
+            ctx.drawImage(src, 0, 0, w, h);
+            return { w, h, data: ctx.getImageData(0, 0, w, h).data };
+        }
+
+        // Find the grid on the first scene, read every scene with the same grid,
+        // and build one shared set of design colors.
+        function analyzeDesign(sources) {
+            const first = readImagePixels(sources[0]);
+            const rows = detectGridAxis(first, 'y');
+            const cols = detectGridAxis(first, 'x');
+
+            let box, detected = true;
+            if (rows && cols) {
+                box = { x0: cols.start, x1: cols.end, y0: rows.start, y1: rows.end, w: cols.count, h: rows.count };
+            } else {
+                // No grid lines (e.g. a picture saved from this app): the whole image is the grid.
+                // Find the cell count from where colors change; fall back to the current size.
+                const bw = detectBlockCount(first, 'x', gridW);
+                const bh = detectBlockCount(first, 'y', gridH);
+                detected = !!(bw && bh);
+                box = { x0: 0, x1: first.w, y0: 0, y1: first.h, w: bw || gridW, h: bh || gridH };
+            }
+
+            const allCells = [];
+            sources.forEach((src, i) => {
+                const px = i === 0 ? first : readImagePixels(src);
+                allCells.push(...sampleCells(px, box));
+            });
+            const { grid, colors } = groupColors(allCells);
+
+            const grids = [];
+            for (let i = 0; i < sources.length; i++) {
+                grids.push(grid.slice(i * box.h, (i + 1) * box.h));
+            }
+            return { grids, colors, w: box.w, h: box.h, detected };
+        }
+
+        // A grid-line pixel is gray or black (dark enough, little color)
+        function isLinePixel(data, i) {
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+            return mx < 225 && (mx - mn) < 45;
+        }
+
+        // Find evenly spaced grid lines along one axis.
+        // Grid lines cross the whole grid, so their rows/columns have many line pixels.
+        // Returns { start, end, count } or null.
+        function detectGridAxis(px, axis) {
+            const { w, h, data } = px;
+            const len = axis === 'y' ? h : w;
+            const profile = new Float32Array(len);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    if (isLinePixel(data, (y * w + x) * 4)) profile[axis === 'y' ? y : x]++;
+                }
+            }
+
+            const max = Math.max(...profile);
+            if (max < (axis === 'y' ? w : h) * 0.2) return null;
+            const threshold = max * 0.5;
+
+            // Centers of runs above the threshold = line candidates
+            const lines = [];
+            let runStart = -1;
+            for (let i = 0; i <= len; i++) {
+                const on = i < len && profile[i] >= threshold;
+                if (on && runStart < 0) runStart = i;
+                if (!on && runStart >= 0) { lines.push((runStart + i - 1) / 2); runStart = -1; }
+            }
+            if (lines.length < 3) return null;
+
+            // Typical spacing (median ignores merged lines and stray marks)
+            const gaps = [];
+            for (let i = 1; i < lines.length; i++) gaps.push(lines[i] - lines[i - 1]);
+            gaps.sort((a, b) => a - b);
+            const pitch = gaps[Math.floor(gaps.length / 2)];
+            if (pitch < 4) return null;
+
+            const start = lines[0], end = lines[lines.length - 1];
+            const count = Math.round((end - start) / pitch);
+            if (count < 2 || count > MAX_DETECTED_SIZE) return null;
+
+            // Most expected line positions should have a real line nearby
+            const step = (end - start) / count;
+            let hits = 0;
+            for (let k = 0; k <= count; k++) {
+                const pos = start + k * step;
+                if (lines.some(l => Math.abs(l - pos) <= step * 0.2)) hits++;
+            }
+            if (hits / (count + 1) < 0.6) return null;
+
+            return { start, end, count };
+        }
+
+        // For pixel art without grid lines: color changes only happen on cell borders,
+        // so find a cell count whose borders explain (almost) all change positions.
+        // Prefers the current size, otherwise the smallest count that fits. Returns null if none fits.
+        function detectBlockCount(px, axis, preferred) {
+            const { w, h, data } = px;
+            const len = axis === 'x' ? w : h;
+            const other = axis === 'x' ? h : w;
+            const stride = Math.max(1, Math.floor(other / 200));
+            const changed = new Uint8Array(len);
+            for (let o = 0; o < other; o += stride) {
+                for (let i = 1; i < len; i++) {
+                    const a = (axis === 'x' ? o * w + i - 1 : (i - 1) * w + o) * 4;
+                    const b = (axis === 'x' ? o * w + i : i * w + o) * 4;
+                    const diff = Math.abs(data[a] - data[b]) + Math.abs(data[a + 1] - data[b + 1]) + Math.abs(data[a + 2] - data[b + 2]);
+                    if (diff > 60) changed[i] = 1;
+                }
+            }
+            const positions = [];
+            for (let i = 1; i < len; i++) if (changed[i]) positions.push(i);
+            if (positions.length === 0) return null;
+
+            const fits = (n) => {
+                const pitch = len / n;
+                const tol = Math.max(1.5, pitch * 0.08);
+                const ok = positions.filter(x => Math.abs(x - Math.round(x / pitch) * pitch) <= tol).length;
+                return ok / positions.length >= 0.95;
+            };
+            if (preferred && fits(preferred)) return preferred;
+            for (let n = 2; n <= MAX_DETECTED_SIZE; n++) {
+                if (fits(n)) return n;
+            }
+            return null;
+        }
+
+        // Average color of each cell's center area (keeps away from grid lines)
+        function sampleCells(px, box) {
+            const { w, h, data } = px;
+            const cw = (box.x1 - box.x0) / box.w;
+            const ch = (box.y1 - box.y0) / box.h;
+            const steps = 8;
+            const cells = [];
+            for (let r = 0; r < box.h; r++) {
+                const row = [];
+                for (let c = 0; c < box.w; c++) {
+                    let sr = 0, sg = 0, sb = 0, n = 0;
+                    for (let sy = 0; sy < steps; sy++) {
+                        for (let sx = 0; sx < steps; sx++) {
+                            const x = Math.floor(box.x0 + (c + 0.3 + 0.4 * (sx + 0.5) / steps) * cw);
+                            const y = Math.floor(box.y0 + (r + 0.3 + 0.4 * (sy + 0.5) / steps) * ch);
+                            if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                            const i = (y * w + x) * 4;
+                            sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; n++;
+                        }
+                    }
+                    row.push(n ? [sr / n, sg / n, sb / n] : [255, 255, 255]);
+                }
+                cells.push(row);
+            }
+            return cells;
+        }
+
+        // Group similar cell colors into the design's own colors.
+        // White / near-white cells become empty (not painted).
+        function groupColors(cellColors) {
+            const isWhite = ([r, g, b]) => Math.min(r, g, b) > 215;
+            const clusters = []; // { sum: [r,g,b], n }
+            const assign = cellColors.map(row => row.map(rgb => {
+                if (isWhite(rgb)) return -1;
+                let best = -1, bestDist = 45;
+                clusters.forEach((cl, i) => {
+                    const d = colorDistance(...rgb, cl.sum[0] / cl.n, cl.sum[1] / cl.n, cl.sum[2] / cl.n);
+                    if (d < bestDist) { bestDist = d; best = i; }
+                });
+                if (best < 0) {
+                    clusters.push({ sum: [0, 0, 0], n: 0 });
+                    best = clusters.length - 1;
+                }
+                const cl = clusters[best];
+                cl.sum[0] += rgb[0]; cl.sum[1] += rgb[1]; cl.sum[2] += rgb[2]; cl.n++;
+                return best;
+            }));
+
+            let clusterHex;
+            if (clusters.length > MAX_DESIGN_COLORS) {
+                // Too many colors (e.g. a photo): fall back to the basic 10 colors
+                clusterHex = clusters.map(cl => {
+                    const [r, g, b] = cl.sum.map(v => v / cl.n);
+                    return PALETTE[closestPaletteIndex(r, g, b)].hex;
+                });
+            } else {
+                clusterHex = clusters.map(cl => {
+                    const [r, g, b] = cl.sum.map(v => v / cl.n);
+                    // Snap to a basic color if it is practically the same
+                    const p = PALETTE[closestPaletteIndex(r, g, b)];
+                    return colorDistance(r, g, b, ...hexToRgb(p.hex)) < 20 ? p.hex : rgbToHex(r, g, b);
+                });
+            }
+
+            const grid = assign.map(row => row.map(i => i < 0 ? null : clusterHex[i]));
+            const colors = [...new Set(clusterHex)];
+            return { grid, colors };
+        }
+
+        // --- GIF decoder (all scenes, composited like a browser plays them) ---
+        function decodeGIF(bytes) {
+            let p = 6; // skip "GIF89a"
+            const u8 = () => bytes[p++];
+            const u16 = () => { const v = bytes[p] | (bytes[p + 1] << 8); p += 2; return v; };
+            const readColorTable = (n) => { const t = bytes.subarray(p, p + n * 3); p += n * 3; return t; };
+            const skipSubBlocks = () => { let n; while ((n = u8())) p += n; };
+            const readSubBlocks = () => {
+                const parts = [];
+                let total = 0, n;
+                while ((n = u8())) { parts.push(bytes.subarray(p, p + n)); p += n; total += n; }
+                const out = new Uint8Array(total);
+                let o = 0;
+                parts.forEach(part => { out.set(part, o); o += part.length; });
+                return out;
+            };
+
+            const W = u16(), H = u16();
+            const packed = u8();
+            p += 2; // background index, aspect ratio
+            const globalTable = (packed & 0x80) ? readColorTable(2 << (packed & 7)) : null;
+
+            const canvas = new Uint8ClampedArray(W * H * 4).fill(255); // white paper
+            const frames = [];
+            let disposal = 0, transIndex = -1;
+
+            while (p < bytes.length) {
+                const block = u8();
+                if (block === 0x3B) break; // trailer
+                if (block === 0x21) {      // extension
+                    const label = u8();
+                    if (label === 0xF9) {
+                        u8(); // block size (4)
+                        const pk = u8();
+                        u16(); // delay
+                        const ti = u8();
+                        u8(); // terminator
+                        disposal = (pk >> 2) & 7;
+                        transIndex = (pk & 1) ? ti : -1;
+                    } else {
+                        skipSubBlocks();
+                    }
+                } else if (block === 0x2C) { // image
+                    const fx = u16(), fy = u16(), fw = u16(), fh = u16();
+                    const ipk = u8();
+                    const table = (ipk & 0x80) ? readColorTable(2 << (ipk & 7)) : globalTable;
+                    const interlaced = !!(ipk & 0x40);
+                    const minCodeSize = u8();
+                    const indices = lzwDecode(readSubBlocks(), minCodeSize, fw * fh);
+                    if (!table) throw new Error('no color table');
+
+                    const saved = disposal === 3 ? canvas.slice() : null;
+                    const rowOrder = interlaced ? interlaceOrder(fh) : null;
+                    for (let i = 0; i < fh; i++) {
+                        const y = fy + (rowOrder ? rowOrder[i] : i);
+                        if (y >= H) continue;
+                        for (let x = 0; x < fw; x++) {
+                            const X = fx + x;
+                            if (X >= W) continue;
+                            const idx = indices[i * fw + x];
+                            if (idx === transIndex) continue;
+                            const o = (y * W + X) * 4;
+                            canvas[o] = table[idx * 3];
+                            canvas[o + 1] = table[idx * 3 + 1];
+                            canvas[o + 2] = table[idx * 3 + 2];
+                            canvas[o + 3] = 255;
+                        }
+                    }
+                    frames.push(canvas.slice());
+
+                    if (disposal === 2) {
+                        for (let y = fy; y < Math.min(H, fy + fh); y++) {
+                            canvas.fill(255, (y * W + fx) * 4, (y * W + Math.min(W, fx + fw)) * 4);
+                        }
+                    } else if (saved) {
+                        canvas.set(saved);
+                    }
+                    disposal = 0;
+                    transIndex = -1;
+                } else {
+                    break;
+                }
+            }
+            return { width: W, height: H, frames };
+        }
+
+        // Interlaced GIF rows arrive as rows 0,8,16.. then 4,12.. then 2,6.. then 1,3..
+        function interlaceOrder(h) {
+            const order = [];
+            [[0, 8], [4, 8], [2, 4], [1, 2]].forEach(([start, step]) => {
+                for (let y = start; y < h; y += step) order.push(y);
+            });
+            return order;
+        }
+
+        function lzwDecode(data, minCodeSize, pixelCount) {
+            const clearCode = 1 << minCodeSize;
+            const eoiCode = clearCode + 1;
+            const out = new Uint8Array(pixelCount);
+            const prefix = new Int32Array(4096);
+            const suffix = new Uint8Array(4096);
+            const stack = new Uint8Array(4097);
+            for (let i = 0; i < clearCode; i++) { prefix[i] = -1; suffix[i] = i; }
+
+            let codeSize = minCodeSize + 1;
+            let dictSize = eoiCode + 1;
+            let buf = 0, bits = 0, dp = 0, op = 0;
+            let old = -1, first = 0;
+
+            while (op < pixelCount) {
+                while (bits < codeSize) {
+                    if (dp >= data.length) return out;
+                    buf |= data[dp++] << bits;
+                    bits += 8;
+                }
+                let code = buf & ((1 << codeSize) - 1);
+                buf >>>= codeSize;
+                bits -= codeSize;
+
+                if (code === clearCode) {
+                    codeSize = minCodeSize + 1;
+                    dictSize = eoiCode + 1;
+                    old = -1;
+                    continue;
+                }
+                if (code === eoiCode) break;
+                if (old === -1) {
+                    if (code >= clearCode) continue; // malformed
+                    out[op++] = suffix[code];
+                    old = code;
+                    first = code;
+                    continue;
+                }
+
+                const inCode = code;
+                let sp = 0;
+                if (code >= dictSize) { // code not in table yet (KwKwK case)
+                    stack[sp++] = first;
+                    code = old;
+                }
+                while (code >= clearCode) {
+                    stack[sp++] = suffix[code];
+                    code = prefix[code];
+                }
+                first = suffix[code];
+                stack[sp++] = first;
+                while (sp > 0 && op < pixelCount) out[op++] = stack[--sp];
+
+                if (dictSize < 4096) {
+                    prefix[dictSize] = old;
+                    suffix[dictSize] = first;
+                    dictSize++;
+                    if (dictSize === (1 << codeSize) && codeSize < 12) codeSize++;
+                }
+                old = inCode;
+            }
+            return out;
+        }
+
+        // --- Save (갤러리 / 다운로드) ---
+        function drawGridToCanvas(ctx, grid, cellPx) {
+            grid.forEach((row, r) => row.forEach((color, c) => {
+                ctx.fillStyle = color || EMPTY_HEX;
+                ctx.fillRect(c * cellPx, r * cellPx, cellPx, cellPx);
+            }));
+        }
+
+        // Synchronous so the share sheet still counts as a direct tap (needed on iPad)
+        function dataUrlToBlob(dataUrl) {
+            const [head, base64] = dataUrl.split(',');
+            const type = head.match(/:(.*?);/)[1];
+            const bin = atob(base64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Blob([bytes], { type });
+        }
+
+        function downloadBlob(blob, filename) {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = filename;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        }
+
+        // Tablet/phone: open the share sheet ("이미지 저장" puts it in the gallery).
+        // If sharing is not possible, show the picture so it can be saved by long-press.
+        // Computer: download the file.
+        async function saveImage(blob, filename, doneMessage) {
+            const isTouchDevice = navigator.maxTouchPoints > 0;
+            if (!isTouchDevice) {
+                downloadBlob(blob, filename);
+                showToast(`${doneMessage} (다운로드 폴더)`);
+                return;
+            }
+            const file = new File([blob], filename, { type: blob.type });
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                showToast("'이미지 저장' 또는 '갤러리'를 누르면 갤러리에 저장돼요!");
+                try {
+                    await navigator.share({ files: [file] });
+                    return;
+                } catch (err) {
+                    if (err.name === 'AbortError') return; // closed the share sheet
+                }
+            }
+            openSavePopup(blob, filename);
+        }
+
+        function openSavePopup(blob, filename) {
+            if (savePopupUrl) URL.revokeObjectURL(savePopupUrl);
+            savePopupUrl = URL.createObjectURL(blob);
+            document.getElementById('save-popup-img').src = savePopupUrl;
+            document.getElementById('save-popup-download').onclick = () => downloadBlob(blob, filename);
+            const popup = document.getElementById('save-popup');
+            popup.classList.remove('hidden');
+            popup.classList.add('flex');
+        }
+
+        function closeSavePopup() {
+            const popup = document.getElementById('save-popup');
+            popup.classList.add('hidden');
+            popup.classList.remove('flex');
+        }
+
+        function savePNG() {
+            const scale = Math.max(1, Math.floor(1024 / Math.max(gridW, gridH))); // integer scale keeps edges sharp
+            const canvas = document.createElement('canvas');
+            canvas.width = gridW * scale;
+            canvas.height = gridH * scale;
+            drawGridToCanvas(canvas.getContext('2d'), frames[currentFrameIndex], scale);
+            const blob = dataUrlToBlob(canvas.toDataURL('image/png'));
+            saveImage(blob, `pixel_scene_${currentFrameIndex + 1}.png`, `${currentFrameIndex + 1}장면 사진 저장 완료!`);
+        }
+
+        function saveGIF() {
+            const scale = Math.max(1, Math.floor(512 / Math.max(gridW, gridH)));
+            const delayCs = Math.round(frameDelay / 10);
+            const bytes = encodeGIF(frames, gridW, gridH, scale, delayCs);
+            const blob = new Blob([bytes], { type: 'image/gif' });
+            saveImage(blob, 'pixel_animation.gif', frames.length > 1
+                ? `${frames.length}장면 움직이는 사진 저장 완료!`
+                : '저장 완료! 장면을 더 만들면 움직이는 사진이 돼요.');
+        }
+
+        // Minimal GIF89a encoder. The color table is built from the colors actually used,
+        // so every color stays exact.
+        function encodeGIF(frameList, w, h, scale, delayCs) {
+            const used = new Set([EMPTY_HEX]);
+            frameList.forEach(g => g.forEach(row => row.forEach(v => { if (v) used.add(v.toLowerCase()); })));
+            const colors = [...used].slice(0, 256);
+            const colorIndex = new Map(colors.map((hex, i) => [hex, i]));
+            let bits = 1;
+            while ((1 << bits) < colors.length) bits++;
+            bits = Math.max(bits, 2);
+            const tableSize = 1 << bits;
+
+            const W = w * scale, H = h * scale;
+            const out = [];
+            const push16 = v => out.push(v & 255, (v >> 8) & 255);
+            const pushStr = s => { for (const ch of s) out.push(ch.charCodeAt(0)); };
+
+            // Header + logical screen + global color table
+            pushStr('GIF89a');
+            push16(W); push16(H);
+            out.push(0x80 | 0x70 | (bits - 1), 0, 0);
+            for (let i = 0; i < tableSize; i++) {
+                out.push(...hexToRgb(colors[i] || '#000000'));
+            }
+            // Loop forever
+            out.push(0x21, 0xFF, 0x0B);
+            pushStr('NETSCAPE2.0');
+            out.push(0x03, 0x01, 0x00, 0x00, 0x00);
+
+            frameList.forEach(grid => {
+                // Graphic control extension (delay)
+                out.push(0x21, 0xF9, 0x04, 0x04);
+                push16(delayCs);
+                out.push(0x00, 0x00);
+                // Image descriptor
+                out.push(0x2C);
+                push16(0); push16(0); push16(W); push16(H);
+                out.push(0x00);
+
+                const pixels = new Uint8Array(W * H);
+                for (let y = 0; y < H; y++) {
+                    const row = grid[Math.floor(y / scale)];
+                    for (let x = 0; x < W; x++) {
+                        const v = row[Math.floor(x / scale)];
+                        pixels[y * W + x] = v ? (colorIndex.get(v.toLowerCase()) || 0) : 0;
+                    }
+                }
+                out.push(bits);
+                const lzw = lzwEncode(pixels, bits);
+                for (let i = 0; i < lzw.length; i += 255) {
+                    const n = Math.min(255, lzw.length - i);
+                    out.push(n);
+                    for (let j = 0; j < n; j++) out.push(lzw[i + j]);
+                }
+                out.push(0x00);
+            });
+
+            out.push(0x3B);
+            return new Uint8Array(out);
+        }
+
+        function lzwEncode(indices, minCodeSize) {
+            const clearCode = 1 << minCodeSize;
+            const eoiCode = clearCode + 1;
+            let codeSize = minCodeSize + 1;
+            let nextCode = eoiCode + 1;
+            let table = new Map();
+            const out = [];
+            let buf = 0, bufBits = 0;
+            const emit = (code) => {
+                buf |= code << bufBits;
+                bufBits += codeSize;
+                while (bufBits >= 8) {
+                    out.push(buf & 255);
+                    buf >>>= 8;
+                    bufBits -= 8;
+                }
+            };
+
+            emit(clearCode);
+            let prefix = indices[0];
+            for (let i = 1; i < indices.length; i++) {
+                const k = indices[i];
+                const key = prefix * 256 + k;
+                const found = table.get(key);
+                if (found !== undefined) {
+                    prefix = found;
+                    continue;
+                }
+                emit(prefix);
+                if (nextCode === 4096) {
+                    emit(clearCode);
+                    table = new Map();
+                    codeSize = minCodeSize + 1;
+                    nextCode = eoiCode + 1;
+                } else {
+                    if (nextCode >= (1 << codeSize)) codeSize++;
+                    table.set(key, nextCode++);
+                }
+                prefix = k;
+            }
+            emit(prefix);
+            emit(eoiCode);
+            if (bufBits > 0) out.push(buf & 255);
+            return out;
+        }
+
+        // --- Toast Notification ---
+        function showToast(message) {
+            const existingToast = document.getElementById('toast-popup');
+            if (existingToast) existingToast.remove();
+
+            const toast = document.createElement('div');
+            toast.id = 'toast-popup';
+            toast.className = 'fixed bottom-5 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs sm:text-sm font-bold py-2.5 px-5 rounded-2xl shadow-xl z-[60] transition-opacity duration-300 text-center max-w-[90vw]';
+            toast.innerText = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => { toast.style.opacity = '0'; }, 2700);
+            setTimeout(() => { toast.remove(); }, 3000);
+        }
+    </script>
+</body>
+</html>
