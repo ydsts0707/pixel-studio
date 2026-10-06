@@ -9,6 +9,9 @@
     <!-- Google Fonts: Jua & Inter -->
     <link href="https://fonts.googleapis.com/css2?family=Jua&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        html, body {
+            height: 100%;
+        }
         body {
             font-family: 'Jua', 'Inter', sans-serif;
             background-color: #f0fdf4;
@@ -20,12 +23,99 @@
             user-select: none;
             -webkit-user-select: none;
         }
+
+        /* --- 한 화면 배치 (스크롤 없음) --- */
+        #app {
+            height: 100vh;
+            height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 8px;
+            max-width: 1100px;
+            margin: 0 auto;
+        }
+        #workspace {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        #canvas-area {
+            position: relative;
+            flex: 1;
+            min-height: 180px;
+            overflow: hidden;
+        }
+        /* 그림판 크기는 JS(fitCanvas)가 남은 공간에 맞춰 정해요 */
         #pixel-canvas {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
             touch-action: none;
             user-select: none;
             -webkit-user-select: none;
             -webkit-touch-callout: none; /* 길게 누르면 뜨는 메뉴 방지 */
         }
+        .palette-grid {
+            display: grid;
+            grid-template-columns: repeat(10, minmax(0, 1fr));
+            gap: 6px;
+        }
+        .tool-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(0, 1fr));
+            gap: 6px;
+        }
+        /* 태블릿 가로: 왼쪽 그림판, 오른쪽 도구 */
+        @media (orientation: landscape) and (min-width: 700px) {
+            #workspace {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+                grid-template-rows: auto auto 1fr auto;
+            }
+            #canvas-area { grid-column: 1; grid-row: 1 / -1; }
+            #trace-bar { grid-column: 2; grid-row: 1; }
+            #scene-bar { grid-column: 2; grid-row: 2; }
+            #palette-box { grid-column: 2; grid-row: 3; align-self: start; }
+            #tool-bar { grid-column: 2; grid-row: 4; }
+            .palette-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+            .tool-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+
+        .tool-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            min-height: 60px;
+            border-radius: 16px;
+            font-weight: 700;
+            font-size: 13px;
+            line-height: 1.1;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+            transition: transform 0.05s ease, background-color 0.15s ease;
+        }
+        .tool-btn:active { transform: scale(0.95); }
+        .tool-btn .icon { font-size: 24px; line-height: 1; }
+        .tool-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        /* 휴대폰처럼 작은 화면: 조금씩 줄여서 그림판 공간 확보 */
+        @media (max-width: 640px) {
+            #app { padding: 6px; gap: 6px; }
+            #workspace { gap: 6px; }
+            #canvas-area { min-height: 130px; }
+            .tool-btn { min-height: 48px; font-size: 11px; border-radius: 12px; }
+            .tool-btn .icon { font-size: 18px; }
+            .palette-grid { gap: 4px; }
+            .palette-grid button { height: 32px !important; }
+            #frame-tabs canvas { width: 24px; height: 24px; }
+            #frame-tabs { gap: 6px; }
+        }
+
         .pixel-cell {
             position: relative;
             border-radius: 2px;
@@ -50,6 +140,13 @@
             image-rendering: crisp-edges;
             object-fit: contain;
         }
+        /* 지우개 선택 표시 (체크무늬) */
+        .eraser-dot {
+            background-image: linear-gradient(45deg, #cbd5e1 25%, transparent 25%, transparent 75%, #cbd5e1 75%),
+                              linear-gradient(45deg, #cbd5e1 25%, #fff 25%, #fff 75%, #cbd5e1 75%);
+            background-size: 12px 12px;
+            background-position: 0 0, 6px 6px;
+        }
         /* 저장 안내 창의 그림은 길게 눌러 저장할 수 있어야 함 */
         #save-popup-img {
             -webkit-touch-callout: default;
@@ -59,136 +156,133 @@
         }
     </style>
 </head>
-<body class="min-h-screen text-slate-800 flex flex-col items-center p-3 sm:p-6">
+<body class="text-slate-800">
 
-    <header class="text-center mb-5">
-        <h1 class="text-3xl sm:text-4xl font-extrabold text-emerald-600 drop-shadow-sm">
-            🎨 픽셀 애니메이션 스튜디오 Pro
-        </h1>
-        <p class="text-sm sm:text-base text-slate-600 mt-1">
-            자유롭게 그리거나, 도안을 따라 그리며 움직이는 픽셀 그림을 만들어요!
-        </p>
-    </header>
-
-    <!-- Main Container -->
-    <main class="w-full max-w-xl bg-white rounded-3xl shadow-xl p-4 sm:p-6 border border-emerald-100 flex flex-col gap-5">
-
-        <!-- 0. Mode Tabs -->
-        <section class="flex bg-emerald-50 p-1.5 rounded-2xl gap-1.5 border border-emerald-100">
-            <button id="tab-free" onclick="switchMode('free')" class="flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition">
-                ✏️ 자유그리기
-            </button>
-            <button id="tab-trace" onclick="switchMode('trace')" class="flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition">
-                🖌️ 따라그리기
-            </button>
-        </section>
-
-        <!-- 1. Screen (grid) Size Selector -->
-        <section class="bg-emerald-50/60 p-3.5 rounded-2xl border border-emerald-100 flex flex-col gap-2">
-            <div class="flex items-center justify-between">
-                <span class="text-sm sm:text-base font-bold text-emerald-800">🔲 화면 크기:</span>
-                <span id="current-grid-badge" class="text-xs bg-emerald-600 text-white px-2 py-0.5 rounded-full font-sans">16 x 16</span>
+    <div id="app">
+        <!-- Header: title, mode tabs, screen size -->
+        <header class="flex items-center gap-2">
+            <h1 class="text-lg sm:text-xl font-extrabold text-emerald-600 whitespace-nowrap">
+                🎨<span class="hidden sm:inline"> 픽셀 스튜디오</span>
+            </h1>
+            <div class="flex-1 flex bg-emerald-50 p-1 rounded-2xl gap-1 border border-emerald-100">
+                <button id="tab-free" onclick="switchMode('free')" class="flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition">
+                    ✏️ 자유그리기
+                </button>
+                <button id="tab-trace" onclick="switchMode('trace')" class="flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition">
+                    🖌️ 따라그리기
+                </button>
             </div>
-            <div id="grid-size-buttons" class="grid grid-cols-6 gap-1.5 sm:gap-2">
+            <button onclick="openSizePicker()" title="화면 크기 바꾸기" class="bg-white border border-emerald-200 hover:bg-emerald-50 text-emerald-800 text-xs sm:text-sm font-bold py-3 px-3 rounded-xl whitespace-nowrap">
+                🔲 <span id="current-grid-badge">16×16</span>
+            </button>
+        </header>
+
+        <div id="workspace">
+            <!-- Trace bar (따라그리기 only) -->
+            <section id="trace-bar" class="hidden bg-amber-50 border border-amber-200 rounded-2xl p-2 flex flex-wrap items-center gap-2">
+                <label for="image-upload-input" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-4 rounded-xl text-sm shadow-sm cursor-pointer transition whitespace-nowrap">
+                    📁 도안 올리기
+                </label>
+                <input type="file" id="image-upload-input" accept="image/*" class="hidden" onchange="handleImageUpload(event)">
+                <span id="trace-empty" class="flex-1 min-w-[140px] text-xs text-amber-800">
+                    격자가 그려진 도안이나 움직이는 사진을 올려 보세요
+                </span>
+                <div id="trace-progress" class="hidden flex-1 min-w-[150px] flex-col gap-1">
+                    <span id="trace-progress-text" class="text-xs font-bold text-amber-900">따라그리기: 0 / 0칸</span>
+                    <div class="h-3 bg-amber-100 rounded-full overflow-hidden">
+                        <div id="trace-progress-bar" class="h-full bg-amber-500 rounded-full transition-all duration-200" style="width: 0%"></div>
+                    </div>
+                </div>
+                <button id="fill-guide-btn" onclick="fillFromGuide()" class="hidden bg-white border border-amber-300 hover:bg-amber-100 text-amber-800 font-bold py-3 px-3 rounded-xl text-xs whitespace-nowrap">
+                    🪄 도안 색 채우기
+                </button>
+            </section>
+
+            <!-- Scenes -->
+            <section id="scene-bar" class="bg-slate-50 border border-slate-200 rounded-2xl p-2 flex items-center gap-2">
+                <div id="frame-tabs" class="flex-1 min-w-0 flex flex-wrap items-center gap-2 pt-1">
+                    <!-- Scene chips injected via JS -->
+                </div>
+                <button onclick="addNewFrame()" title="지금 장면을 복사해서 다음 장면을 만들어요" class="tool-btn bg-sky-500 hover:bg-sky-600 text-white px-3 shrink-0">
+                    <span class="icon">➕</span>장면
+                </button>
+                <div class="flex flex-col items-center gap-1 shrink-0" title="움직임 미리보기">
+                    <canvas id="preview-canvas" width="16" height="16" class="pixelated w-12 h-12 rounded-lg border-2 border-sky-400 bg-white"></canvas>
+                    <select id="speed-select" onchange="changeSpeed(this.value)" class="text-[11px] bg-white border border-slate-200 rounded-md px-0.5 py-0.5 font-sans">
+                        <option value="500">느리게</option>
+                        <option value="300" selected>보통</option>
+                        <option value="150">빠르게</option>
+                    </select>
+                </div>
+            </section>
+
+            <!-- Drawing area -->
+            <section id="canvas-area" class="bg-slate-100 rounded-3xl border border-slate-200 shadow-inner">
+                <div id="pixel-canvas" class="shadow-md rounded-xl overflow-hidden border border-slate-300 grid gap-[1px] bg-slate-300">
+                    <!-- Pixel cells injected via JS -->
+                </div>
+            </section>
+
+            <!-- Palette -->
+            <section id="palette-box" class="bg-slate-50 border border-slate-200 rounded-2xl p-2 flex flex-col gap-2">
+                <div class="flex items-center gap-2 px-1">
+                    <span id="current-color-dot" class="w-9 h-9 rounded-full border-2 border-slate-800 shadow-sm shrink-0"></span>
+                    <span id="selected-color-label" class="text-sm font-extrabold text-slate-700">지금 색: 빨강</span>
+                </div>
+                <div id="design-palette-wrap" class="hidden flex-col gap-1">
+                    <span class="text-xs font-bold text-amber-800 px-1">도안 색</span>
+                    <div id="design-palette" class="palette-grid"></div>
+                </div>
+                <div id="color-palette" class="palette-grid"></div>
+            </section>
+
+            <!-- Tools & Save -->
+            <section id="tool-bar" class="tool-grid">
+                <button onclick="setEraser()" id="eraser-btn" class="tool-btn">
+                    <span class="icon">🧽</span>지우개
+                </button>
+                <button onclick="undo()" id="undo-btn" title="되돌리기 (Ctrl+Z)" class="tool-btn bg-slate-200 hover:bg-slate-300 text-slate-700">
+                    <span class="icon">↩️</span>되돌리기
+                </button>
+                <button onclick="redo()" id="redo-btn" title="다시하기 (Ctrl+Y)" class="tool-btn bg-slate-200 hover:bg-slate-300 text-slate-700">
+                    <span class="icon">↪️</span>다시하기
+                </button>
+                <button onclick="clearCanvas()" title="지금 장면과 도안을 모두 지워요" class="tool-btn bg-rose-100 hover:bg-rose-200 text-rose-700">
+                    <span class="icon">🗑️</span>비우기
+                </button>
+                <button onclick="savePNG()" class="tool-btn bg-emerald-500 hover:bg-emerald-600 text-white">
+                    <span class="icon">📷</span>사진 저장
+                </button>
+                <button onclick="saveGIF()" class="tool-btn bg-purple-600 hover:bg-purple-700 text-white">
+                    <span class="icon">🎬</span>움직이는 사진
+                </button>
+            </section>
+        </div>
+    </div>
+
+    <!-- Screen size picker -->
+    <div id="size-modal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" onclick="if (event.target === this) closeModal('size-modal')">
+        <div class="bg-white rounded-3xl shadow-2xl p-5 w-full max-w-sm flex flex-col gap-3 text-center">
+            <h3 class="text-lg font-bold text-slate-800">🔲 화면 크기 고르기</h3>
+            <p class="text-sm text-slate-500">칸 수를 바꾸면 그림도 새 크기에 맞게 바뀌어요.</p>
+            <div id="grid-size-buttons" class="grid grid-cols-3 gap-2">
                 <!-- Buttons injected via JS -->
             </div>
-        </section>
+            <button onclick="closeModal('size-modal')" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl">닫기</button>
+        </div>
+    </div>
 
-        <!-- 2. Trace Mode Panel: Upload & Progress -->
-        <section id="trace-panel" class="hidden bg-amber-50/60 p-3.5 rounded-2xl border border-amber-100 flex flex-col gap-2.5">
-            <label for="image-upload-input" class="bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 px-4 rounded-xl text-center text-sm shadow-sm cursor-pointer transition">
-                📁 도안 올리기 (움직이는 사진도 OK)
-            </label>
-            <input type="file" id="image-upload-input" accept="image/*" class="hidden" onchange="handleImageUpload(event)">
-
-            <p id="trace-empty" class="text-xs text-amber-800 text-center leading-relaxed">
-                격자가 그려진 도안을 올리면 칸 수와 색을 자동으로 찾아 흐리게 깔아 줘요.<br>
-                움직이는 사진(GIF)을 올리면 장면마다 도안이 깔려요.
-            </p>
-
-            <!-- Progress -->
-            <div id="trace-progress" class="hidden flex-col gap-1.5 pt-2 border-t border-amber-200/60">
-                <div class="flex items-center justify-between gap-2 text-xs font-bold text-amber-900">
-                    <span id="trace-progress-text">따라그리기 진행: 0 / 0칸</span>
-                    <button onclick="fillFromGuide()" class="text-amber-700 hover:text-amber-900 underline underline-offset-2 whitespace-nowrap">
-                        도안 색 그대로 채우기
-                    </button>
-                </div>
-                <div class="h-2.5 bg-amber-100 rounded-full overflow-hidden">
-                    <div id="trace-progress-bar" class="h-full bg-amber-500 rounded-full transition-all duration-200" style="width: 0%"></div>
-                </div>
-                <p class="text-[11px] text-amber-700/80">흐린 칸 가운데 점과 같은 색으로 칠해 보세요. 다른 색으로 칠하면 점이 계속 보여요!</p>
+    <!-- Confirm (지우기 전에 한 번 더 묻기) -->
+    <div id="confirm-modal" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" onclick="if (event.target === this) closeModal('confirm-modal')">
+        <div class="bg-white rounded-3xl shadow-2xl p-6 w-full max-w-sm flex flex-col gap-4 text-center">
+            <div class="text-5xl">🤔</div>
+            <p id="confirm-text" class="text-lg font-bold text-slate-800"></p>
+            <div class="grid grid-cols-2 gap-3">
+                <button onclick="closeModal('confirm-modal')" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-4 rounded-2xl text-lg">취소</button>
+                <button id="confirm-ok" class="bg-rose-500 hover:bg-rose-600 text-white font-bold py-4 rounded-2xl text-lg">지우기</button>
             </div>
-        </section>
-
-        <!-- 3. Scene (frame) Manager -->
-        <section class="flex items-center gap-2 bg-slate-50 p-2.5 rounded-2xl border border-slate-200">
-            <div id="frame-tabs" class="flex-1 min-w-0 flex items-center gap-1.5 overflow-x-auto py-1">
-                <!-- Scene chips injected via JS -->
-            </div>
-            <button onclick="addNewFrame()" title="지금 장면을 복사해서 다음 장면을 만들어요" class="bg-sky-500 hover:bg-sky-600 text-white text-xs sm:text-sm font-bold py-2 px-3 rounded-xl shadow-sm transition whitespace-nowrap shrink-0">
-                ➕ 장면
-            </button>
-            <div class="flex flex-col items-center gap-1 shrink-0" title="움직임 미리보기">
-                <canvas id="preview-canvas" width="16" height="16" class="pixelated w-11 h-11 rounded-lg border-2 border-sky-400 bg-white"></canvas>
-                <select id="speed-select" onchange="changeSpeed(this.value)" class="text-[10px] bg-white border border-slate-200 rounded-md px-0.5 py-0.5 font-sans">
-                    <option value="500">느리게</option>
-                    <option value="300" selected>보통</option>
-                    <option value="150">빠르게</option>
-                </select>
-            </div>
-        </section>
-
-        <!-- 4. Interactive Drawing Canvas Area -->
-        <section class="flex flex-col items-center justify-center bg-slate-100 p-4 rounded-3xl border border-slate-200 shadow-inner">
-            <div id="pixel-canvas" class="w-full shadow-md rounded-xl overflow-hidden border border-slate-300 grid gap-[1px] bg-slate-300">
-                <!-- Pixel cells injected via JS -->
-            </div>
-        </section>
-
-        <!-- 5. Color Palette -->
-        <section class="flex flex-col gap-2">
-            <div class="flex items-center justify-between text-xs sm:text-sm font-bold text-slate-700 px-1">
-                <span>🖍️ 색연필 팔레트</span>
-                <span id="selected-color-label" class="text-emerald-600 font-extrabold">선택된 색: 빨강</span>
-            </div>
-            <div id="design-palette-wrap" class="hidden flex-col gap-1.5 bg-amber-50 p-2.5 rounded-2xl border border-amber-200">
-                <span class="text-xs font-bold text-amber-800">도안 색</span>
-                <div id="design-palette" class="grid grid-cols-10 gap-1.5"></div>
-            </div>
-            <div class="flex flex-col gap-1.5 bg-slate-50 p-2.5 rounded-2xl border border-slate-200">
-                <span class="text-xs font-bold text-slate-500">기본 10색</span>
-                <div id="color-palette" class="grid grid-cols-10 gap-1.5"></div>
-            </div>
-        </section>
-
-        <!-- 6. Tools -->
-        <section class="grid grid-cols-4 gap-2 pt-1">
-            <button onclick="setEraser()" id="eraser-btn" class="font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition">
-                🧽 지우개
-            </button>
-            <button onclick="undo()" id="undo-btn" title="되돌리기 (Ctrl+Z)" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
-                ↩️ 되돌리기
-            </button>
-            <button onclick="redo()" id="redo-btn" title="다시하기 (Ctrl+Y)" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed">
-                ↪️ 다시하기
-            </button>
-            <button onclick="clearCanvas()" title="지금 장면과 도안을 모두 지워요" class="bg-rose-100 hover:bg-rose-200 text-rose-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition">
-                🗑️ 비우기
-            </button>
-        </section>
-
-        <!-- 7. Save -->
-        <section class="grid grid-cols-2 gap-2">
-            <button onclick="savePNG()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 px-2 rounded-xl text-sm shadow-sm transition">
-                📷 사진 저장 (지금 장면)
-            </button>
-            <button onclick="saveGIF()" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-2 rounded-xl text-sm shadow-sm transition">
-                🎬 움직이는 사진 저장
-            </button>
-        </section>
-
-    </main>
+        </div>
+    </div>
 
     <!-- Save popup (for tablets that cannot open the share sheet) -->
     <div id="save-popup" class="fixed inset-0 bg-black/60 hidden items-center justify-center z-50 p-4" onclick="if (event.target === this) closeSavePopup()">
@@ -199,8 +293,8 @@
                 그림을 <b>꾹 길게 눌러</b> <b>'사진에 저장'</b> 또는 <b>'이미지 저장'</b>을 누르세요.
             </p>
             <div class="grid grid-cols-2 gap-2 w-full">
-                <button id="save-popup-download" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 rounded-xl text-sm">파일로 저장</button>
-                <button onclick="closeSavePopup()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-2.5 rounded-xl text-sm">닫기</button>
+                <button id="save-popup-download" class="bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-3 rounded-xl text-sm">파일로 저장</button>
+                <button onclick="closeSavePopup()" class="bg-emerald-500 hover:bg-emerald-600 text-white font-bold py-3 rounded-xl text-sm">닫기</button>
             </div>
         </div>
     </div>
@@ -229,7 +323,6 @@
         const MAX_DESIGN_COLORS = 12;
         const MAX_FRAMES = 8;
         const MAX_HISTORY = 50;
-        const CANVAS_MAX_PX = 360;
 
         // --- App State ---
         // (code calls a scene a "frame")
@@ -275,6 +368,8 @@
             renderFramesTabs();
             updateUndoButtons();
             startPreview();
+            // Keep the drawing board as big as the free space allows
+            new ResizeObserver(fitCanvas).observe(document.getElementById('canvas-area'));
         };
 
         // --- Grid helpers ---
@@ -347,7 +442,7 @@
             const base = 'flex-1 py-2.5 rounded-xl text-sm sm:text-base font-bold transition';
             document.getElementById('tab-free').className = `${base} ${mode === 'free' ? 'bg-white shadow-sm text-emerald-600' : 'text-slate-500 hover:text-slate-700'}`;
             document.getElementById('tab-trace').className = `${base} ${mode === 'trace' ? 'bg-white shadow-sm text-amber-600' : 'text-slate-500 hover:text-slate-700'}`;
-            document.getElementById('trace-panel').classList.toggle('hidden', mode !== 'trace');
+            document.getElementById('trace-bar').classList.toggle('hidden', mode !== 'trace');
             renderDesignPalette();
             renderCanvas();
             traceCompleted = isCurrentSceneComplete();
@@ -361,12 +456,16 @@
             GRID_SIZES.forEach(sz => {
                 const isActive = gridW === sz && gridH === sz;
                 const btn = document.createElement('button');
-                btn.className = `py-1.5 rounded-xl text-xs sm:text-sm font-bold border transition ${isActive ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-100'}`;
-                btn.innerText = `${sz}x${sz}`;
-                btn.onclick = () => changeGridSize(sz, sz);
+                btn.className = `py-4 rounded-2xl text-base font-bold border-2 transition ${isActive ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm' : 'bg-white text-slate-700 border-emerald-200 hover:bg-emerald-100'}`;
+                btn.innerText = `${sz}×${sz}`;
+                btn.onclick = () => { closeModal('size-modal'); changeGridSize(sz, sz); };
                 container.appendChild(btn);
             });
-            document.getElementById('current-grid-badge').innerText = `${gridW} x ${gridH}`;
+            document.getElementById('current-grid-badge').innerText = `${gridW}×${gridH}`;
+        }
+
+        function openSizePicker() {
+            openModal('size-modal');
         }
 
         function changeGridSize(newW, newH) {
@@ -450,14 +549,19 @@
             const swatches = document.querySelectorAll('#color-palette button, #design-palette button');
             swatches.forEach(btn => {
                 const isSelected = !isEraserActive && btn.dataset.hex === selectedColor;
-                btn.className = `w-full aspect-square rounded-xl border-2 transition shadow-sm ${isSelected ? 'border-slate-800 scale-110' : 'border-black/5 hover:scale-105'}`;
+                btn.className = `w-full h-11 sm:h-12 rounded-xl transition shadow-sm ${isSelected ? 'ring-4 ring-slate-800 ring-offset-2 scale-105' : 'border-2 border-black/10'}`;
             });
             document.getElementById('eraser-btn').className = isEraserActive
-                ? 'bg-slate-700 text-white font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition ring-2 ring-slate-400'
-                : 'bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold py-2.5 px-2 rounded-xl text-xs sm:text-sm shadow-sm transition';
+                ? 'tool-btn bg-slate-700 text-white ring-4 ring-slate-400'
+                : 'tool-btn bg-slate-200 hover:bg-slate-300 text-slate-700';
+
+            // Big "current color" dot so students always see what they paint with
+            const dot = document.getElementById('current-color-dot');
+            dot.classList.toggle('eraser-dot', isEraserActive);
+            dot.style.backgroundColor = isEraserActive ? '' : selectedColor;
             document.getElementById('selected-color-label').innerText = isEraserActive
-                ? '선택된 도구: 지우개'
-                : `선택된 색: ${selectedColorName}`;
+                ? '지금 도구: 🧽 지우개'
+                : `지금 색: ${selectedColorName}`;
         }
 
         // --- Canvas Rendering ---
@@ -472,8 +576,7 @@
             const canvasEl = document.getElementById('pixel-canvas');
             canvasEl.style.gridTemplateColumns = `repeat(${gridW}, minmax(0, 1fr))`;
             canvasEl.style.gridTemplateRows = `repeat(${gridH}, minmax(0, 1fr))`;
-            canvasEl.style.aspectRatio = `${gridW} / ${gridH}`;
-            canvasEl.style.maxWidth = `${Math.round(CANVAS_MAX_PX * Math.min(1, gridW / gridH))}px`;
+            fitCanvas();
 
             const frag = document.createDocumentFragment();
             for (let r = 0; r < gridH; r++) {
@@ -487,6 +590,41 @@
                 }
             }
             canvasEl.replaceChildren(frag);
+        }
+
+        // Size the board to the largest size that fits the free space (keeps cells square)
+        function fitCanvas() {
+            const area = document.getElementById('canvas-area');
+            const canvasEl = document.getElementById('pixel-canvas');
+            const pad = 12;
+            const aw = area.clientWidth - pad * 2;
+            const ah = area.clientHeight - pad * 2;
+            if (aw <= 0 || ah <= 0) return;
+            const w = Math.min(aw, ah * gridW / gridH);
+            canvasEl.style.width = `${Math.floor(w)}px`;
+            canvasEl.style.height = `${Math.floor(w * gridH / gridW)}px`;
+        }
+
+        // --- Popups ---
+        function openModal(id) {
+            const el = document.getElementById(id);
+            el.classList.remove('hidden');
+            el.classList.add('flex');
+        }
+
+        function closeModal(id) {
+            const el = document.getElementById(id);
+            el.classList.add('hidden');
+            el.classList.remove('flex');
+        }
+
+        // Ask once more before deleting (students may tap by mistake)
+        function confirmAction(message, okLabel, onOk) {
+            document.getElementById('confirm-text').innerText = message;
+            const okBtn = document.getElementById('confirm-ok');
+            okBtn.innerText = okLabel;
+            okBtn.onclick = () => { closeModal('confirm-modal'); onOk(); };
+            openModal('confirm-modal');
         }
 
         function refreshCell(el, r, c) {
@@ -592,6 +730,14 @@
                 showToast('이미 비어 있어요!');
                 return;
             }
+            confirmAction(
+                hadGuide ? '그림과 도안을 모두 지울까요?' : `${currentFrameIndex + 1}번 장면 그림을 모두 지울까요?`,
+                '지우기',
+                () => doClearCanvas(hadGuide)
+            );
+        }
+
+        function doClearCanvas(hadGuide) {
             const snap = snapshot();
             frames[currentFrameIndex] = createEmptyGrid(gridW, gridH);
             if (hadGuide) {
@@ -711,6 +857,10 @@
                 showToast('최소 1개의 장면은 있어야 해요.');
                 return;
             }
+            confirmAction(`${index + 1}번 장면을 지울까요?`, '지우기', () => doDeleteFrame(index));
+        }
+
+        function doDeleteFrame(index) {
             const snap = snapshot();
             frames.splice(index, 1);
             if (guidePerScene && index < guideBases.length) {
@@ -731,24 +881,25 @@
             frames.forEach((_, idx) => {
                 const isActive = idx === currentFrameIndex;
                 const tab = document.createElement('div');
-                tab.className = `flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-xl border text-xs font-bold cursor-pointer transition whitespace-nowrap ${isActive ? 'bg-sky-500 text-white border-sky-500 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-sky-50'}`;
-                tab.title = `${idx + 1}장면`;
+                tab.className = `relative flex flex-col items-center gap-0.5 p-1.5 rounded-xl border-2 text-xs font-bold cursor-pointer transition ${isActive ? 'bg-sky-500 text-white border-sky-500 shadow-sm' : 'bg-white text-slate-700 border-slate-200 hover:bg-sky-50'}`;
+                tab.title = `${idx + 1}번 장면`;
                 tab.onclick = () => selectFrame(idx);
 
                 const thumb = document.createElement('canvas');
                 thumb.id = `thumb-${idx}`;
-                thumb.className = 'pixelated w-6 h-6 rounded bg-white border border-slate-200';
+                thumb.className = 'pixelated w-9 h-9 rounded bg-white border border-slate-200';
                 tab.appendChild(thumb);
 
                 const label = document.createElement('span');
                 label.innerText = `${idx + 1}번`;
                 tab.appendChild(label);
 
-                if (frames.length > 1) {
-                    const delBtn = document.createElement('span');
+                // Delete button only on the selected scene, so it is hard to hit by mistake
+                if (isActive && frames.length > 1) {
+                    const delBtn = document.createElement('button');
                     delBtn.innerText = '✕';
-                    delBtn.className = 'px-1 rounded-full hover:bg-black/10';
-                    delBtn.title = '장면 삭제';
+                    delBtn.className = 'absolute -top-2 -right-2 w-7 h-7 rounded-full bg-rose-500 text-white text-xs font-bold shadow border-2 border-white';
+                    delBtn.title = '장면 지우기';
                     delBtn.onclick = (e) => deleteFrame(idx, e);
                     tab.appendChild(delBtn);
                 }
@@ -756,8 +907,6 @@
                 tabsContainer.appendChild(tab);
                 updateFrameThumbnail(idx);
             });
-            const activeTab = tabsContainer.children[currentFrameIndex];
-            if (activeTab) activeTab.scrollIntoView({ block: 'nearest', inline: 'nearest' });
         }
 
         function updateFrameThumbnail(index) {
@@ -831,14 +980,15 @@
             document.getElementById('trace-empty').classList.toggle('hidden', anyGuide);
             progressEl.classList.toggle('hidden', !anyGuide);
             progressEl.classList.toggle('flex', anyGuide);
+            const p = anyGuide ? sceneProgress(currentFrameIndex) : null;
+            document.getElementById('fill-guide-btn').classList.toggle('hidden', !p);
             if (!anyGuide) return;
 
             const textEl = document.getElementById('trace-progress-text');
             const barEl = document.getElementById('trace-progress-bar');
-            const p = sceneProgress(currentFrameIndex);
-            const prefix = guidePerScene ? `${currentFrameIndex + 1}장면 따라그리기` : '따라그리기 진행';
+            const prefix = guidePerScene ? `${currentFrameIndex + 1}번 장면` : '따라그리기';
             if (!p) {
-                textEl.innerText = `${currentFrameIndex + 1}장면에는 도안이 없어요`;
+                textEl.innerText = `${currentFrameIndex + 1}번 장면에는 도안이 없어요`;
                 barEl.style.width = '0%';
                 return;
             }
@@ -868,7 +1018,7 @@
             });
             showToast(remaining.length === 0
                 ? '🎉 모든 장면 완성! 움직이는 사진으로 저장해 보세요!'
-                : `🎉 ${currentFrameIndex + 1}장면 완성! 다음은 ${remaining[0]}장면이에요.`);
+                : `🎉 ${currentFrameIndex + 1}번 장면 완성! 다음은 ${remaining[0]}번 장면이에요.`);
         }
 
         // --- Design Upload ---
@@ -892,11 +1042,16 @@
                         // Fall back to the browser's decoder (first scene only)
                     }
                 }
-                const url = URL.createObjectURL(file);
-                const img = new Image();
-                img.onload = () => { URL.revokeObjectURL(url); applyDesign([img]); };
-                img.onerror = () => { URL.revokeObjectURL(url); showToast('이미지를 열 수 없어요.'); };
-                img.src = url;
+                // Read as a data URL: works everywhere, including a file opened directly
+                // or a preview window (blob: URLs can be blocked there)
+                const urlReader = new FileReader();
+                urlReader.onload = () => {
+                    const img = new Image();
+                    img.onload = () => applyDesign([img]);
+                    img.onerror = () => showToast('이미지를 열 수 없어요. 사진 파일(PNG, JPG, GIF)인지 확인해 주세요.');
+                    img.src = urlReader.result;
+                };
+                urlReader.readAsDataURL(file);
             };
             reader.readAsArrayBuffer(file);
         }
@@ -1388,15 +1543,11 @@
             savePopupUrl = URL.createObjectURL(blob);
             document.getElementById('save-popup-img').src = savePopupUrl;
             document.getElementById('save-popup-download').onclick = () => downloadBlob(blob, filename);
-            const popup = document.getElementById('save-popup');
-            popup.classList.remove('hidden');
-            popup.classList.add('flex');
+            openModal('save-popup');
         }
 
         function closeSavePopup() {
-            const popup = document.getElementById('save-popup');
-            popup.classList.add('hidden');
-            popup.classList.remove('flex');
+            closeModal('save-popup');
         }
 
         function savePNG() {
@@ -1406,7 +1557,7 @@
             canvas.height = gridH * scale;
             drawGridToCanvas(canvas.getContext('2d'), frames[currentFrameIndex], scale);
             const blob = dataUrlToBlob(canvas.toDataURL('image/png'));
-            saveImage(blob, `pixel_scene_${currentFrameIndex + 1}.png`, `${currentFrameIndex + 1}장면 사진 저장 완료!`);
+            saveImage(blob, `pixel_scene_${currentFrameIndex + 1}.png`, `${currentFrameIndex + 1}번 장면 사진 저장 완료!`);
         }
 
         function saveGIF() {
@@ -1533,7 +1684,7 @@
 
             const toast = document.createElement('div');
             toast.id = 'toast-popup';
-            toast.className = 'fixed bottom-5 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs sm:text-sm font-bold py-2.5 px-5 rounded-2xl shadow-xl z-[60] transition-opacity duration-300 text-center max-w-[90vw]';
+            toast.className = 'fixed top-3 left-1/2 -translate-x-1/2 bg-slate-800 text-white text-xs sm:text-sm font-bold py-2.5 px-5 rounded-2xl shadow-xl z-[60] transition-opacity duration-300 text-center max-w-[90vw]';
             toast.innerText = message;
             document.body.appendChild(toast);
 
