@@ -11,6 +11,7 @@
     <style>
         html, body {
             height: 100%;
+            overflow: hidden;
         }
         body {
             font-family: 'Jua', 'Inter', sans-serif;
@@ -24,16 +25,20 @@
             -webkit-user-select: none;
         }
 
-        /* --- 한 화면 배치 (스크롤 없음) --- */
+        /* --- 한 화면 배치 (스크롤 없음) ---
+           화면이 모자라면 JS(fitApp)가 앱 전체를 게임처럼 같은 비율로 줄여서 맞춰요 */
         #app {
+            position: fixed;
+            left: 0;
+            top: 0;
+            width: 100vw;
             height: 100vh;
             height: 100dvh;
+            transform-origin: 0 0;
             display: flex;
             flex-direction: column;
             gap: 8px;
             padding: 8px;
-            max-width: 1100px;
-            margin: 0 auto;
         }
         #workspace {
             flex: 1;
@@ -47,7 +52,22 @@
             flex: 1;
             min-height: 180px;
             overflow: hidden;
+            touch-action: none; /* two-finger zoom is handled by the app, not the browser */
         }
+        .zoom-btn {
+            width: 44px;
+            height: 44px;
+            border-radius: 9999px;
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid #cbd5e1;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+            font-size: 20px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoom-btn:active { transform: scale(0.92); }
         /* 그림판 크기는 JS(fitCanvas)가 남은 공간에 맞춰 정해요 */
         #pixel-canvas {
             position: absolute;
@@ -102,6 +122,27 @@
         .tool-btn:active { transform: scale(0.95); }
         .tool-btn .icon { font-size: 24px; line-height: 1; }
         .tool-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+        /* 휴대폰 가로처럼 높이가 낮은 화면: 촘촘하게 (앱 전체가 덜 줄어들게) */
+        @media (orientation: landscape) and (max-height: 520px) {
+            #app { gap: 6px; }
+            /* wider right column: more colours / buttons per row, so it is shorter */
+            #workspace { gap: 6px; grid-template-columns: minmax(0, 1fr) minmax(320px, 50%); }
+            .palette-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); }
+            .tool-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+            header button { padding-top: 6px; padding-bottom: 6px; }
+            #trace-bar { padding: 6px; gap: 6px; }
+            #trace-bar label, #trace-bar button { padding-top: 6px; padding-bottom: 6px; }
+            #scene-bar { padding: 6px; }
+            #frame-tabs canvas { width: 26px; height: 26px; }
+            #palette-box { padding: 6px; gap: 6px; }
+            #current-color-dot { width: 26px; height: 26px; }
+            .palette-grid { gap: 5px; }
+            .palette-grid button { height: 34px !important; }
+            .tool-grid { gap: 5px; }
+            .tool-btn { min-height: 46px; font-size: 12px; border-radius: 12px; }
+            .tool-btn .icon { font-size: 19px; }
+        }
 
         /* 휴대폰처럼 작은 화면: 조금씩 줄여서 그림판 공간 확보 */
         @media (max-width: 640px) {
@@ -218,6 +259,11 @@
 
             <!-- Drawing area -->
             <section id="canvas-area" class="bg-slate-100 rounded-3xl border border-slate-200 shadow-inner">
+                <div id="zoom-controls" class="absolute right-2 bottom-2 z-10 flex flex-col gap-1.5">
+                    <button onclick="zoomBy(1.5)" title="크게 보기" class="zoom-btn">➕</button>
+                    <button onclick="zoomBy(1 / 1.5)" title="작게 보기" class="zoom-btn">➖</button>
+                    <button id="zoom-reset" onclick="resetZoom()" title="원래 크기로" class="zoom-btn hidden">⟲</button>
+                </div>
                 <div id="pixel-canvas" class="shadow-md rounded-xl overflow-hidden border border-slate-300 grid gap-[1px] bg-slate-300">
                     <!-- Pixel cells injected via JS -->
                 </div>
@@ -320,7 +366,7 @@
             { name: '검정', hex: '#1e293b' }
         ];
         const EMPTY_HEX = '#ffffff';
-        const GRID_SIZES = [6, 8, 10, 12, 14, 16];
+        const GRID_SIZES = [6, 8, 10, 12, 14, 16, 24, 36, 48];
         const MAX_DETECTED_SIZE = 48;
         const MAX_DESIGN_COLORS = 20;
         const MAX_FRAMES = 8;
@@ -372,6 +418,11 @@
             startPreview();
             // Keep the drawing board as big as the free space allows
             new ResizeObserver(fitCanvas).observe(document.getElementById('canvas-area'));
+            // Fit the whole app to the screen (phone/tablet, portrait/landscape)
+            window.addEventListener('resize', scheduleFit);
+            window.addEventListener('orientationchange', scheduleFit);
+            if (window.visualViewport) window.visualViewport.addEventListener('resize', scheduleFit);
+            fitApp();
         };
 
         // --- Grid helpers ---
@@ -449,6 +500,7 @@
             renderCanvas();
             traceCompleted = isCurrentSceneComplete();
             updateTracePanel();
+            scheduleFit();
         }
 
         // --- Screen (grid) Size ---
@@ -490,6 +542,7 @@
             gridH = newH;
             refreshGuideSize();
             initGridSizeButtons();
+            resetZoom();
         }
 
         function refreshGuideSize() {
@@ -533,6 +586,7 @@
             wrap.classList.toggle('flex', show);
             designColors.forEach((hex, i) => container.appendChild(makeSwatch(hex, `도안 색 ${i + 1}`)));
             updateToolUI();
+            scheduleFit();
         }
 
         function selectColor(hex, name) {
@@ -572,6 +626,7 @@
             renderCanvas();
             updateTracePanel();
             updateUndoButtons();
+            scheduleFit(); // more scenes or a shown panel can change what fits on screen
         }
 
         function renderCanvas() {
@@ -605,6 +660,54 @@
             const w = Math.min(aw, ah * gridW / gridH);
             canvasEl.style.width = `${Math.floor(w)}px`;
             canvasEl.style.height = `${Math.floor(w * gridH / gridW)}px`;
+        }
+
+        // --- Fit the whole app to any screen (like a game) ---
+        // The app is laid out on a "virtual" screen and shrunk with one scale so that everything
+        // (board, palette, tools) is visible without scrolling. Big screens stay at full size.
+        const APP_MAX_WIDTH = 1100;
+        const MIN_BOARD = 220;   // the drawing board should get at least this much room (virtual px)
+        const MIN_SCALE = 0.4;
+        let fitTimer = null;
+
+        function scheduleFit() {
+            if (fitTimer) cancelAnimationFrame(fitTimer);
+            fitTimer = requestAnimationFrame(() => { fitTimer = null; fitApp(); });
+        }
+
+        function fitApp() {
+            const app = document.getElementById('app');
+            const workspace = document.getElementById('workspace');
+            const area = document.getElementById('canvas-area');
+            const vw = window.innerWidth, vh = window.innerHeight;
+
+            const apply = (s) => {
+                const W = vw / s, H = vh / s;
+                app.style.width = `${W}px`;
+                app.style.height = `${H}px`;
+                const side = Math.max(8, (W - APP_MAX_WIDTH) / 2); // centre on very wide screens
+                app.style.paddingLeft = app.style.paddingRight = `${side}px`;
+                app.style.transform = s === 1 ? '' : `scale(${s})`;
+            };
+            // In portrait the board shares the height with everything else: keep it a good size
+            const portrait = vh > vw;
+            const fits = () =>
+                app.scrollHeight <= app.clientHeight + 1 &&
+                workspace.scrollHeight <= workspace.clientHeight + 1 &&
+                area.clientHeight >= Math.max(MIN_BOARD, portrait ? app.clientHeight * 0.42 : 0);
+
+            apply(1);
+            if (!fits()) {
+                // binary search for the largest scale that fits
+                let lo = MIN_SCALE, hi = 1;
+                for (let i = 0; i < 8; i++) {
+                    const mid = (lo + hi) / 2;
+                    apply(mid);
+                    if (fits()) lo = mid; else hi = mid;
+                }
+                apply(lo);
+            }
+            fitCanvas();
         }
 
         // --- Popups ---
@@ -652,19 +755,48 @@
         }
 
         // --- Drawing (pointer events: mouse, touch, pen) ---
+        // One finger paints; two fingers zoom (pinch) and move the board.
+        const touches = new Map();   // pointerId -> {x, y} for fingers on the drawing area
+        let pinch = null;            // state while two fingers are down
+
         function bindCanvasEvents() {
             const canvasEl = document.getElementById('pixel-canvas');
+            const area = document.getElementById('canvas-area');
 
             canvasEl.addEventListener('pointerdown', (e) => {
                 const cell = e.target.closest('.pixel-cell');
                 if (!cell) return;
                 if (e.pointerType === 'mouse' && e.button !== 0) return;
                 e.preventDefault();
+                if (e.pointerType === 'touch' && (touches.size > 0 || pinch)) return; // second finger: zoom, not paint
                 beginStroke();
                 const r = +cell.dataset.r, c = +cell.dataset.c;
                 applyColor(r, c);
                 lastCell = [r, c];
             });
+
+            area.addEventListener('pointerdown', (e) => {
+                if (e.pointerType !== 'touch' || e.target.closest('#zoom-controls')) return;
+                touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                if (touches.size === 2) startPinch();
+            });
+            window.addEventListener('pointermove', (e) => {
+                if (!touches.has(e.pointerId)) return;
+                touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+                if (pinch) movePinch();
+            });
+            const fingerUp = (e) => {
+                touches.delete(e.pointerId);
+                if (touches.size < 2) pinch = null;
+            };
+            window.addEventListener('pointerup', fingerUp);
+            window.addEventListener('pointercancel', fingerUp);
+
+            // PC: mouse wheel zooms around the mouse pointer
+            area.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                zoomAt(Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+            }, { passive: false });
 
             window.addEventListener('pointermove', (e) => {
                 if (!isDrawing) return;
@@ -684,6 +816,78 @@
             window.addEventListener('pointerup', endStroke);
             window.addEventListener('pointercancel', endStroke);
             canvasEl.addEventListener('contextmenu', (e) => e.preventDefault());
+        }
+
+        // --- Zoom (view only: does not change the picture or what is saved) ---
+        const MAX_ZOOM = 6;
+        let zoom = 1, panX = 0, panY = 0;
+
+        function applyZoom() {
+            const canvasEl = document.getElementById('pixel-canvas');
+            // keep at least part of the board on screen
+            const limitX = canvasEl.offsetWidth * zoom / 2, limitY = canvasEl.offsetHeight * zoom / 2;
+            panX = Math.max(-limitX, Math.min(limitX, panX));
+            panY = Math.max(-limitY, Math.min(limitY, panY));
+            canvasEl.style.transform = `translate(-50%, -50%) translate(${panX}px, ${panY}px) scale(${zoom})`;
+            document.getElementById('zoom-reset').classList.toggle('hidden', zoom === 1 && panX === 0 && panY === 0);
+        }
+
+        // Zoom by a factor, keeping the board point under (clientX, clientY) in place
+        function zoomAt(factor, clientX, clientY) {
+            const area = document.getElementById('canvas-area').getBoundingClientRect();
+            const appScale = area.width / document.getElementById('canvas-area').offsetWidth || 1; // whole-app fit scale
+            const cx = (clientX - area.left) / appScale - area.width / appScale / 2;
+            const cy = (clientY - area.top) / appScale - area.height / appScale / 2;
+            const newZoom = Math.max(1, Math.min(MAX_ZOOM, zoom * factor));
+            const k = newZoom / zoom;
+            panX = cx - (cx - panX) * k;
+            panY = cy - (cy - panY) * k;
+            zoom = newZoom;
+            if (zoom === 1) { panX = 0; panY = 0; }
+            applyZoom();
+        }
+
+        function zoomBy(factor) {
+            const area = document.getElementById('canvas-area').getBoundingClientRect();
+            zoomAt(factor, area.left + area.width / 2, area.top + area.height / 2);
+        }
+
+        function resetZoom() {
+            zoom = 1; panX = 0; panY = 0;
+            applyZoom();
+        }
+
+        function startPinch() {
+            // A second finger means "zoom": undo what the first finger just painted
+            if (isDrawing) {
+                isDrawing = false;
+                lastCell = null;
+                if (strokeChanged && pendingSnapshot) {
+                    frames = pendingSnapshot.frames.map(cloneGrid);
+                    renderCanvas();
+                    updateTracePanel();
+                }
+                pendingSnapshot = null;
+            }
+            const [a, b] = [...touches.values()];
+            pinch = {
+                dist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+                midX: (a.x + b.x) / 2, midY: (a.y + b.y) / 2,
+                zoom, panX, panY
+            };
+        }
+
+        function movePinch() {
+            const [a, b] = [...touches.values()];
+            const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+            const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
+            // restart from the pinch start, then zoom around the start midpoint and follow the fingers
+            zoom = pinch.zoom; panX = pinch.panX; panY = pinch.panY;
+            const areaEl = document.getElementById('canvas-area');
+            const appScale = areaEl.getBoundingClientRect().width / areaEl.offsetWidth || 1;
+            panX += (midX - pinch.midX) / appScale;
+            panY += (midY - pinch.midY) / appScale;
+            zoomAt(dist / pinch.dist, midX, midY);
         }
 
         function drawLine(r0, c0, r1, c1, fn) {
