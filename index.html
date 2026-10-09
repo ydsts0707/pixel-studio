@@ -321,8 +321,8 @@
         ];
         const EMPTY_HEX = '#ffffff';
         const GRID_SIZES = [6, 8, 10, 12, 14, 16];
-        const MAX_DETECTED_SIZE = 32;
-        const MAX_DESIGN_COLORS = 12;
+        const MAX_DETECTED_SIZE = 48;
+        const MAX_DESIGN_COLORS = 20;
         const MAX_FRAMES = 8;
         const MAX_HISTORY = 50;
 
@@ -1037,7 +1037,7 @@
                     try {
                         const gif = decodeGIF(bytes);
                         if (gif.frames.length > 0) {
-                            applyDesign(gif.frames.map(f => frameToCanvas(f, gif.width, gif.height)));
+                            readDesignLater(gif.frames.map(f => frameToCanvas(f, gif.width, gif.height)));
                             return;
                         }
                     } catch (err) {
@@ -1049,7 +1049,7 @@
                 const urlReader = new FileReader();
                 urlReader.onload = () => {
                     const img = new Image();
-                    img.onload = () => applyDesign([img]);
+                    img.onload = () => readDesignLater([img]);
                     img.onerror = () => showToast('이미지를 열 수 없어요. 사진 파일(PNG, JPG, GIF)인지 확인해 주세요.');
                     img.src = urlReader.result;
                 };
@@ -1067,6 +1067,12 @@
         }
 
         // sources: one image, or one canvas per scene of an animated GIF
+        // Reading a design takes a moment on tablets: show a message first, then work
+        function readDesignLater(sources) {
+            showToast('🔍 도안을 읽고 있어요...');
+            setTimeout(() => applyDesign(sources), 60);
+        }
+
         function applyDesign(sources) {
             let truncated = false;
             if (sources.length > MAX_FRAMES) {
@@ -1115,8 +1121,10 @@
 
         // Read the pixels of an image/canvas (downscaled, on white so transparency = paper)
         function readImagePixels(src) {
+            // Work at about 1000 px: big pictures are shrunk, small ones enlarged
+            // (tiny pictures have cells only a few pixels wide, too small to find the lines)
             const MAX_SIDE = 1000;
-            const scale = Math.min(1, MAX_SIDE / Math.max(src.width, src.height));
+            const scale = MAX_SIDE / Math.max(src.width, src.height);
             const w = Math.max(1, Math.round(src.width * scale));
             const h = Math.max(1, Math.round(src.height * scale));
             const canvas = document.getElementById('processing-canvas');
@@ -1135,6 +1143,7 @@
             const first = readImagePixels(sources[0]);
             // 1) worksheet-style grids (thin/thick/pale lines, text, legends, coloured cells)
             let box = detectGrid(first), detected = true;
+            if (box) box = dropNumberHeaders(first, box);
             if (!box) {
                 // 2) simple grey/black grid lines
                 const rows = detectGridAxis(first, 'y');
@@ -1164,6 +1173,59 @@
                 grids.push(grid.slice(i * box.h, (i + 1) * box.h));
             }
             return { grids, colors, w: box.w, h: box.h, detected };
+        }
+
+        // Many charts number the columns/rows (1, 2, 3 ...) in an extra first row/column.
+        // Such a row is blank cells with small dark marks, while the rest of the blank cells are clean.
+        // (Number worksheets, where every blank cell has a "0", are left alone.)
+        function dropNumberHeaders(px, box) {
+            const { w, data } = px;
+            const cw = (box.x1 - box.x0) / box.w, ch = (box.y1 - box.y0) / box.h;
+            const lum = (i) => data[i] * 0.3 + data[i + 1] * 0.59 + data[i + 2] * 0.11;
+            // per cell: is it blank (light), and does it carry dark marks (digits)?
+            const info = (r, c) => {
+                let light = 0, dark = 0, colourful = 0, n = 0;
+                for (let sy = 0; sy < 10; sy++) {
+                    for (let sx = 0; sx < 10; sx++) {
+                        const x = Math.floor(box.x0 + (c + 0.2 + 0.6 * (sx + 0.5) / 10) * cw);
+                        const y = Math.floor(box.y0 + (r + 0.2 + 0.6 * (sy + 0.5) / 10) * ch);
+                        if (x < 0 || y < 0 || x >= w || y >= px.h) continue;
+                        const i = (y * w + x) * 4;
+                        const v = lum(i);
+                        n++;
+                        if (v > 200) light++;
+                        else if (v < 140) dark++;
+                        if (Math.max(data[i], data[i + 1], data[i + 2]) - Math.min(data[i], data[i + 1], data[i + 2]) > 70) colourful++;
+                    }
+                }
+                if (!n) return { blank: false, marked: false };
+                // "blank" = mostly white paper, maybe with dark writing, not a filled (coloured/black) cell
+                // (screen text can have coloured edges, so a little colour is allowed)
+                return {
+                    blank: light / n > 0.4 && dark / n < 0.5 && colourful / n < 0.3,
+                    marked: dark / n > 0.03
+                };
+            };
+            const cells = [];
+            for (let r = 0; r < box.h; r++) {
+                const row = [];
+                for (let c = 0; c < box.w; c++) row.push(info(r, c));
+                cells.push(row);
+            }
+            const share = (list) => {
+                const blanks = list.filter(i => i.blank);
+                return blanks.length ? blanks.filter(i => i.marked).length / blanks.length : 0;
+            };
+            const inner = [];
+            for (let r = 1; r < box.h; r++) for (let c = 1; c < box.w; c++) inner.push(cells[r][c]);
+            if (share(inner) > 0.2) return box; // blank cells are numbered everywhere
+
+            const result = { ...box };
+            const firstRow = cells[0].slice(1), firstCol = cells.slice(1).map(row => row[0]);
+            const looksLikeHeader = (list) => list.filter(i => i.blank).length >= list.length * 0.8 && share(list) >= 0.6;
+            if (box.h > 3 && looksLikeHeader(firstRow)) { result.y0 += ch; result.h--; }
+            if (box.w > 3 && looksLikeHeader(firstCol)) { result.x0 += cw; result.w--; }
+            return result;
         }
 
         // --- Grid finder for worksheet / internet designs ---
@@ -1288,7 +1350,10 @@
             return Math.max(p[k - 1] || 0, p[k] || 0, p[k + 1] || 0);
         }
 
-        // Whole-pixel line spacing from autocorrelation (first strong peak, so doubles are skipped)
+        // Whole-pixel line spacing from autocorrelation (first strong peak, so doubles are skipped).
+        // Pictures are worked on at ~1000 px, so cells are at least ~10 px; smaller repeats are
+        // textures (dotted borders, double lines).
+        const MIN_PITCH = 10;
         function roughPitch(p, a, b) {
             const len = b - a;
             let mean = 0;
@@ -1300,15 +1365,15 @@
             if (!energy) return null;
             const r = [];
             const maxL = Math.floor(len / 3);
-            for (let L = 4; L <= maxL; L++) {
+            for (let L = MIN_PITCH - 1; L <= maxL + 1; L++) {
                 let s = 0;
                 for (let i = 0; i + L < len; i++) s += q[i] * q[i + L];
                 r[L] = s / energy;
             }
             let maxR = -Infinity;
-            for (let L = 4; L <= maxL; L++) if (r[L] > maxR) maxR = r[L];
+            for (let L = MIN_PITCH; L <= maxL; L++) if (r[L] > maxR) maxR = r[L];
             if (!(maxR > 0.1)) return null;
-            for (let L = 5; L < maxL; L++) {
+            for (let L = MIN_PITCH; L <= maxL; L++) {
                 if (r[L] >= r[L - 1] && r[L] >= r[L + 1] && r[L] >= 0.6 * maxR) return L;
             }
             return null;
@@ -1348,17 +1413,35 @@
             const sorted = Array.from(cov).sort((x, y) => y - x);
             const ref = sorted[Math.floor(len * 0.05)] || sorted[0];
             if (ref < 3) return null;
-            // Longest stretch with good coverage; crossing (and thick) lines leave short gaps
-            const maxGap = Math.max(4, Math.round(crossPitch * 0.3));
-            let best = null, start = -1, lastOn = -1;
-            for (let t = 0; t < len; t++) {
-                if (cov[t] >= ref * 0.45) {
-                    if (start < 0 || t - lastOn > maxGap) start = t;
-                    lastOn = t;
-                    if (!best || lastOn - start > best[1] - best[0]) best = [start, lastOn];
+            // Split into parts separated by "dead" stretches (almost no lines for over a cell),
+            // e.g. a second grid or a colour table further down. Rows of filled cells can hide most
+            // lines, so inside a part only the first and last well-covered positions matter.
+            const deadLen = Math.max(4, Math.round(crossPitch * 0.6));
+            const parts = [];
+            let partStart = -1, deadRun = 0;
+            for (let t = 0; t <= len; t++) {
+                const alive = t < len && cov[t] >= ref * 0.1;
+                if (alive) {
+                    if (partStart < 0) partStart = t;
+                    deadRun = 0;
+                } else if (partStart >= 0) {
+                    deadRun++;
+                    if (deadRun > deadLen || t === len) {
+                        parts.push([partStart, t - deadRun]);
+                        partStart = -1;
+                        deadRun = 0;
+                    }
                 }
             }
-            return best ? { from: best[0], to: best[1] } : null;
+            let best = null;
+            for (const [a, b] of parts) {
+                let from = -1, to = -1;
+                for (let t = a; t <= b; t++) {
+                    if (cov[t] >= ref * 0.5) { if (from < 0) from = t; to = t; }
+                }
+                if (from >= 0 && (!best || to - from > best.to - best.from)) best = { from, to };
+            }
+            return best;
         }
 
         // Snap a span to the nearest grid lines, then refine with a straight-line fit
@@ -1474,27 +1557,29 @@
             return null;
         }
 
-        // Average color of each cell's center area (keeps away from grid lines)
+        // Colour of each cell: the middle value (median) of its inner area, away from the grid lines.
+        // The median ignores small marks inside cells (numbers, circles, stars, dots).
         function sampleCells(px, box) {
             const { w, h, data } = px;
             const cw = (box.x1 - box.x0) / box.w;
             const ch = (box.y1 - box.y0) / box.h;
-            const steps = 8;
+            const steps = 10;
+            const median = (arr) => { arr.sort((a, b) => a - b); return arr[arr.length >> 1]; };
             const cells = [];
             for (let r = 0; r < box.h; r++) {
                 const row = [];
                 for (let c = 0; c < box.w; c++) {
-                    let sr = 0, sg = 0, sb = 0, n = 0;
+                    const rs = [], gs = [], bs = [];
                     for (let sy = 0; sy < steps; sy++) {
                         for (let sx = 0; sx < steps; sx++) {
-                            const x = Math.floor(box.x0 + (c + 0.3 + 0.4 * (sx + 0.5) / steps) * cw);
-                            const y = Math.floor(box.y0 + (r + 0.3 + 0.4 * (sy + 0.5) / steps) * ch);
+                            const x = Math.floor(box.x0 + (c + 0.2 + 0.6 * (sx + 0.5) / steps) * cw);
+                            const y = Math.floor(box.y0 + (r + 0.2 + 0.6 * (sy + 0.5) / steps) * ch);
                             if (x < 0 || y < 0 || x >= w || y >= h) continue;
                             const i = (y * w + x) * 4;
-                            sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; n++;
+                            rs.push(data[i]); gs.push(data[i + 1]); bs.push(data[i + 2]);
                         }
                     }
-                    row.push(n ? [sr / n, sg / n, sb / n] : [255, 255, 255]);
+                    row.push(rs.length ? [median(rs), median(gs), median(bs)] : [255, 255, 255]);
                 }
                 cells.push(row);
             }
