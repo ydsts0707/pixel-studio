@@ -53,7 +53,30 @@
             min-height: 180px;
             overflow: hidden;
             touch-action: none; /* two-finger zoom is handled by the app, not the browser */
+            display: flex;
         }
+        /* board on one side, button strip on the other (chosen by JS from the area's shape) */
+        #canvas-area.controls-right { flex-direction: row-reverse; }
+        #canvas-area.controls-bottom { flex-direction: column-reverse; }
+        #zoom-controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 6px;
+            flex-shrink: 0;
+        }
+        #canvas-area.controls-right #zoom-controls { flex-direction: column; }
+        #canvas-area.controls-bottom #zoom-controls { flex-direction: row; }
+        #board-viewport {
+            position: relative;
+            flex: 1;
+            min-width: 0;
+            min-height: 0;
+            overflow: hidden;
+        }
+        #board-viewport.pan-mode { cursor: grab; }
+        .zoom-btn.active { background: #0ea5e9; border-color: #0284c7; box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.35); }
         .zoom-btn {
             width: 44px;
             height: 44px;
@@ -120,6 +143,7 @@
             transition: transform 0.05s ease, background-color 0.15s ease;
         }
         .tool-btn:active { transform: scale(0.95); }
+        .tool-btn { white-space: nowrap; letter-spacing: -0.02em; overflow: hidden; }
         .tool-btn .icon { font-size: 24px; line-height: 1; }
         .tool-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
@@ -258,14 +282,18 @@
             </section>
 
             <!-- Drawing area -->
-            <section id="canvas-area" class="bg-slate-100 rounded-3xl border border-slate-200 shadow-inner">
-                <div id="zoom-controls" class="absolute right-2 bottom-2 z-10 flex flex-col gap-1.5">
+            <section id="canvas-area" class="controls-right bg-slate-100 rounded-3xl border border-slate-200 shadow-inner">
+                <!-- Buttons have their own strip, so they never cover the board -->
+                <div id="zoom-controls">
+                    <button id="pan-btn" onclick="togglePanMode()" title="손으로 그림판 옮기기" class="zoom-btn">✋</button>
                     <button onclick="zoomBy(1.5)" title="크게 보기" class="zoom-btn">➕</button>
                     <button onclick="zoomBy(1 / 1.5)" title="작게 보기" class="zoom-btn">➖</button>
                     <button id="zoom-reset" onclick="resetZoom()" title="원래 크기로" class="zoom-btn hidden">⟲</button>
                 </div>
-                <div id="pixel-canvas" class="shadow-md rounded-xl overflow-hidden border border-slate-300 grid gap-[1px] bg-slate-300">
-                    <!-- Pixel cells injected via JS -->
+                <div id="board-viewport">
+                    <div id="pixel-canvas" class="shadow-md rounded-xl overflow-hidden border border-slate-300 grid gap-[1px] bg-slate-300">
+                        <!-- Pixel cells injected via JS -->
+                    </div>
                 </div>
             </section>
 
@@ -417,7 +445,9 @@
             updateUndoButtons();
             startPreview();
             // Keep the drawing board as big as the free space allows
-            new ResizeObserver(fitCanvas).observe(document.getElementById('canvas-area'));
+            const boardObserver = new ResizeObserver(fitCanvas);
+            boardObserver.observe(document.getElementById('canvas-area'));
+            boardObserver.observe(document.getElementById('board-viewport'));
             // Fit the whole app to the screen (phone/tablet, portrait/landscape)
             window.addEventListener('resize', scheduleFit);
             window.addEventListener('orientationchange', scheduleFit);
@@ -566,7 +596,7 @@
             btn.style.backgroundColor = hex;
             btn.title = name;
             btn.dataset.hex = hex;
-            btn.onclick = () => selectColor(hex, name);
+            btn.onclick = () => { setPanMode(false); selectColor(hex, name); }; // picking a colour = back to painting
             return btn;
         }
 
@@ -597,6 +627,7 @@
         }
 
         function setEraser() {
+            setPanMode(false);
             isEraserActive = true;
             updateToolUI();
         }
@@ -652,10 +683,17 @@
         // Size the board to the largest size that fits the free space (keeps cells square)
         function fitCanvas() {
             const area = document.getElementById('canvas-area');
+            const viewport = document.getElementById('board-viewport');
             const canvasEl = document.getElementById('pixel-canvas');
-            const pad = 12;
-            const aw = area.clientWidth - pad * 2;
-            const ah = area.clientHeight - pad * 2;
+            // Button strip goes beside the board when the area is wide, below it when tall
+            // (decided from the whole area, so it does not flip back and forth)
+            const wide = area.clientWidth >= area.clientHeight;
+            area.classList.toggle('controls-right', wide);
+            area.classList.toggle('controls-bottom', !wide);
+
+            const pad = 10;
+            const aw = viewport.clientWidth - pad * 2;
+            const ah = viewport.clientHeight - pad * 2;
             if (aw <= 0 || ah <= 0) return;
             const w = Math.min(aw, ah * gridW / gridH);
             canvasEl.style.width = `${Math.floor(w)}px`;
@@ -768,6 +806,7 @@
                 if (!cell) return;
                 if (e.pointerType === 'mouse' && e.button !== 0) return;
                 e.preventDefault();
+                if (panMode) return; // ✋ mode moves the board instead
                 if (e.pointerType === 'touch' && (touches.size > 0 || pinch)) return; // second finger: zoom, not paint
                 beginStroke();
                 const r = +cell.dataset.r, c = +cell.dataset.c;
@@ -791,6 +830,26 @@
             };
             window.addEventListener('pointerup', fingerUp);
             window.addEventListener('pointercancel', fingerUp);
+
+            // ✋ mode: drag with one finger or the mouse to move the board
+            const viewport = document.getElementById('board-viewport');
+            viewport.addEventListener('pointerdown', (e) => {
+                if (!panMode || pinch) return;
+                if (e.pointerType === 'mouse' && e.button !== 0) return;
+                if (e.pointerType === 'touch' && touches.size > 0) return; // second finger: pinch
+                e.preventDefault();
+                panDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, panX, panY };
+            });
+            window.addEventListener('pointermove', (e) => {
+                if (!panDrag || e.pointerId !== panDrag.id || pinch) return;
+                const s = screenScale();
+                panX = panDrag.panX + (e.clientX - panDrag.x) / s;
+                panY = panDrag.panY + (e.clientY - panDrag.y) / s;
+                applyZoom();
+            });
+            const panUp = (e) => { if (panDrag && e.pointerId === panDrag.id) panDrag = null; };
+            window.addEventListener('pointerup', panUp);
+            window.addEventListener('pointercancel', panUp);
 
             // PC: mouse wheel zooms around the mouse pointer
             area.addEventListener('wheel', (e) => {
@@ -832,12 +891,18 @@
             document.getElementById('zoom-reset').classList.toggle('hidden', zoom === 1 && panX === 0 && panY === 0);
         }
 
+        // How much the whole app is shrunk on screen (see fitApp)
+        function screenScale() {
+            const v = document.getElementById('board-viewport');
+            return v.getBoundingClientRect().width / v.offsetWidth || 1;
+        }
+
         // Zoom by a factor, keeping the board point under (clientX, clientY) in place
         function zoomAt(factor, clientX, clientY) {
-            const area = document.getElementById('canvas-area').getBoundingClientRect();
-            const appScale = area.width / document.getElementById('canvas-area').offsetWidth || 1; // whole-app fit scale
-            const cx = (clientX - area.left) / appScale - area.width / appScale / 2;
-            const cy = (clientY - area.top) / appScale - area.height / appScale / 2;
+            const view = document.getElementById('board-viewport').getBoundingClientRect();
+            const appScale = screenScale();
+            const cx = (clientX - view.left) / appScale - view.width / appScale / 2;
+            const cy = (clientY - view.top) / appScale - view.height / appScale / 2;
             const newZoom = Math.max(1, Math.min(MAX_ZOOM, zoom * factor));
             const k = newZoom / zoom;
             panX = cx - (cx - panX) * k;
@@ -848,8 +913,25 @@
         }
 
         function zoomBy(factor) {
-            const area = document.getElementById('canvas-area').getBoundingClientRect();
-            zoomAt(factor, area.left + area.width / 2, area.top + area.height / 2);
+            const view = document.getElementById('board-viewport').getBoundingClientRect();
+            zoomAt(factor, view.left + view.width / 2, view.top + view.height / 2);
+        }
+
+        // ✋ mode: one finger (or the mouse) moves the board instead of painting
+        let panMode = false;
+        let panDrag = null;
+
+        function setPanMode(on) {
+            if (panMode === on) return;
+            panMode = on;
+            panDrag = null;
+            document.getElementById('pan-btn').classList.toggle('active', on);
+            document.getElementById('board-viewport').classList.toggle('pan-mode', on);
+            showToast(on ? '✋ 손 모드: 끌어서 그림판을 옮겨요. 색을 고르면 다시 칠할 수 있어요.' : '🖍️ 칠하기 모드');
+        }
+
+        function togglePanMode() {
+            setPanMode(!panMode);
         }
 
         function resetZoom() {
@@ -858,6 +940,7 @@
         }
 
         function startPinch() {
+            panDrag = null;
             // A second finger means "zoom": undo what the first finger just painted
             if (isDrawing) {
                 isDrawing = false;
@@ -883,8 +966,7 @@
             const midX = (a.x + b.x) / 2, midY = (a.y + b.y) / 2;
             // restart from the pinch start, then zoom around the start midpoint and follow the fingers
             zoom = pinch.zoom; panX = pinch.panX; panY = pinch.panY;
-            const areaEl = document.getElementById('canvas-area');
-            const appScale = areaEl.getBoundingClientRect().width / areaEl.offsetWidth || 1;
+            const appScale = screenScale();
             panX += (midX - pinch.midX) / appScale;
             panY += (midY - pinch.midY) / appScale;
             zoomAt(dist / pinch.dist, midX, midY);
