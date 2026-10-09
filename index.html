@@ -61,7 +61,7 @@
         }
         .palette-grid {
             display: grid;
-            grid-template-columns: repeat(10, minmax(0, 1fr));
+            grid-template-columns: repeat(12, minmax(0, 1fr));
             gap: 6px;
         }
         .tool-grid {
@@ -81,7 +81,7 @@
             #scene-bar { grid-column: 2; grid-row: 2; }
             #palette-box { grid-column: 2; grid-row: 3; align-self: start; }
             #tool-bar { grid-column: 2; grid-row: 4; }
-            .palette-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+            .palette-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
             .tool-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
         }
 
@@ -110,7 +110,7 @@
             #canvas-area { min-height: 130px; }
             .tool-btn { min-height: 48px; font-size: 11px; border-radius: 12px; }
             .tool-btn .icon { font-size: 18px; }
-            .palette-grid { gap: 4px; }
+            .palette-grid { gap: 4px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
             .palette-grid button { height: 32px !important; }
             #frame-tabs canvas { width: 24px; height: 24px; }
             #frame-tabs { gap: 6px; }
@@ -311,9 +311,11 @@
             { name: '노랑', hex: '#eab308' },
             { name: '연두', hex: '#84cc16' },
             { name: '초록', hex: '#10b981' },
+            { name: '하늘', hex: '#38bdf8' },
             { name: '파랑', hex: '#3b82f6' },
             { name: '남색', hex: '#6366f1' },
             { name: '보라', hex: '#a855f7' },
+            { name: '진분홍', hex: '#ec4899' },
             { name: '갈색', hex: '#854d0e' },
             { name: '검정', hex: '#1e293b' }
         ];
@@ -1131,13 +1133,17 @@
         // and build one shared set of design colors.
         function analyzeDesign(sources) {
             const first = readImagePixels(sources[0]);
-            const rows = detectGridAxis(first, 'y');
-            const cols = detectGridAxis(first, 'x');
-
-            let box, detected = true;
-            if (rows && cols) {
-                box = { x0: cols.start, x1: cols.end, y0: rows.start, y1: rows.end, w: cols.count, h: rows.count };
-            } else {
+            // 1) worksheet-style grids (thin/thick/pale lines, text, legends, coloured cells)
+            let box = detectGrid(first), detected = true;
+            if (!box) {
+                // 2) simple grey/black grid lines
+                const rows = detectGridAxis(first, 'y');
+                const cols = detectGridAxis(first, 'x');
+                if (rows && cols) {
+                    box = { x0: cols.start, x1: cols.end, y0: rows.start, y1: rows.end, w: cols.count, h: rows.count };
+                }
+            }
+            if (!box) {
                 // No grid lines (e.g. a picture saved from this app): the whole image is the grid.
                 // Find the cell count from where colors change; fall back to the current size.
                 const bw = detectBlockCount(first, 'x', gridW);
@@ -1158,6 +1164,223 @@
                 grids.push(grid.slice(i * box.h, (i + 1) * box.h));
             }
             return { grids, colors, w: box.w, h: box.h, detected };
+        }
+
+        // --- Grid finder for worksheet / internet designs ---
+        // Idea: find thin-line pixels, get the line spacing from how the line counts repeat,
+        // then find where the grid is (the area that many evenly spaced lines cross).
+        // Returns { x0, x1, y0, y1, w, h } or null.
+        function detectGrid(px) {
+            const { w, h } = px;
+            const { V, H } = findLinePixels(px);
+
+            // First pass ignores a thin margin (page edges, decorative borders)
+            const mx = Math.round(w * 0.03), my = Math.round(h * 0.03);
+            let box = { x0: mx, x1: w - mx, y0: my, y1: h - my };
+            let result = null;
+            for (let pass = 0; pass < 2; pass++) {
+                const profX = lineProfile(V, w, 'x', box);
+                const profY = lineProfile(H, w, 'y', box);
+                const roughX = roughPitch(profX, box.x0, box.x1);
+                const roughY = roughPitch(profY, box.y0, box.y1);
+                if (!roughX || !roughY) break;
+                const fx = finePitch(profX, box.x0, box.x1, roughX);
+                const fy = finePitch(profY, box.y0, box.y1, roughY);
+
+                // Candidate line positions across the whole image
+                const vx = [], hy = [];
+                for (let x = fx.phase - Math.floor(fx.phase / fx.pitch) * fx.pitch; x < w; x += fx.pitch) vx.push(x);
+                for (let y = fy.phase - Math.floor(fy.phase / fy.pitch) * fy.pitch; y < h; y += fy.pitch) hy.push(y);
+                const rowsSpan = gridSpan(V, w, h, 'x', vx, fy.pitch); // rows crossed by vertical lines
+                const colsSpan = gridSpan(H, w, h, 'y', hy, fx.pitch); // columns crossed by horizontal lines
+                if (!rowsSpan || !colsSpan) break;
+
+                const X = fitGridLines(profX, fx.pitch, fx.phase, colsSpan.from, colsSpan.to);
+                const Y = fitGridLines(profY, fy.pitch, fy.phase, rowsSpan.from, rowsSpan.to);
+                if (!X || !Y) break;
+                result = { x0: X.start, x1: X.end, y0: Y.start, y1: Y.end, w: X.count, h: Y.count };
+
+                // Second pass: measure again inside the found grid only
+                const m = 3;
+                box = {
+                    x0: Math.max(0, Math.floor(X.start) - m), x1: Math.min(w, Math.ceil(X.end) + m),
+                    y0: Math.max(0, Math.floor(Y.start) - m), y1: Math.min(h, Math.ceil(Y.end) + m)
+                };
+            }
+            // The first pass can be rough; only the final answer has to be a sensible grid
+            if (!result || result.w < 2 || result.h < 2 || result.w > MAX_DETECTED_SIZE || result.h > MAX_DETECTED_SIZE) return null;
+            return result;
+        }
+
+        // Line pixels: brighter or darker than BOTH neighbours (a ridge), checked at several widths.
+        // V = part of a vertical line, H = part of a horizontal line.
+        function findLinePixels(px) {
+            const { w, h, data } = px;
+            const T = 45, TL = 12;
+            const dist = (a, b) => Math.abs(data[a] - data[b]) + Math.abs(data[a + 1] - data[b + 1]) + Math.abs(data[a + 2] - data[b + 2]);
+            const lum = (a) => data[a] * 0.3 + data[a + 1] * 0.59 + data[a + 2] * 0.11;
+            const isRidge = (i, l, r) => {
+                // pale lines: slightly brighter/darker than both sides
+                const a = lum(i) - lum(l), b = lum(i) - lum(r);
+                if ((a > TL && b > TL) || (a < -TL && b < -TL)) return true;
+                // a grey line on a coloured cell can have the same brightness, so compare colours too
+                const dl = dist(i, l), dr = dist(i, r);
+                return dl > T && dr > T && dist(l, r) < Math.min(dl, dr) * 0.8;
+            };
+            const Vr = new Uint8Array(w * h), Hr = new Uint8Array(w * h);
+            const widths = [1, 2, 3, 5]; // thin and thick lines
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const i = y * w + x, b = i * 4;
+                    for (const D of widths) {
+                        if (!Vr[i] && x - D >= 0 && x + D < w && isRidge(b, b - D * 4, b + D * 4)) Vr[i] = 1;
+                        if (!Hr[i] && y - D >= 0 && y + D < h && isRidge(b, b - D * w * 4, b + D * w * 4)) Hr[i] = 1;
+                    }
+                }
+            }
+            // Drop dense repeating textures (dotted borders): line pixels 7 px away on BOTH sides
+            const S = 7;
+            const V = new Uint8Array(w * h), H = new Uint8Array(w * h);
+            for (let y = 0; y < h; y++) {
+                for (let x = 0; x < w; x++) {
+                    const i = y * w + x;
+                    if (Vr[i] && !(x - S >= 0 && x + S < w && Vr[i - S] && Vr[i + S])) V[i] = 1;
+                    if (Hr[i] && !(y - S >= 0 && y + S < h && Hr[i - S * w] && Hr[i + S * w])) H[i] = 1;
+                }
+            }
+            // Keep only long straight runs (grid lines), not short strokes of letters and numbers
+            keepLongRuns(V, w, h, 'y', Math.max(6, Math.round(h * 0.012)));
+            keepLongRuns(H, w, h, 'x', Math.max(6, Math.round(w * 0.012)));
+            return { V, H };
+        }
+
+        // Clear runs shorter than minLen along one direction (1 px gaps are bridged)
+        function keepLongRuns(map, w, h, dir, minLen) {
+            const outer = dir === 'y' ? w : h, inner = dir === 'y' ? h : w;
+            const idx = (o, t) => dir === 'y' ? t * w + o : o * w + t;
+            for (let o = 0; o < outer; o++) {
+                let t = 0;
+                while (t < inner) {
+                    if (!map[idx(o, t)]) { t++; continue; }
+                    let end = t;
+                    while (end + 1 < inner && (map[idx(o, end + 1)] || (end + 2 < inner && map[idx(o, end + 2)]))) end++;
+                    if (end - t + 1 < minLen) {
+                        for (let u = t; u <= end; u++) map[idx(o, u)] = 0;
+                    }
+                    t = end + 1;
+                }
+            }
+        }
+
+        // Number of line pixels per column ('x') or per row ('y'), counted inside a box
+        function lineProfile(map, w, axis, box) {
+            const p = new Float32Array(axis === 'x' ? w : map.length / w);
+            for (let y = box.y0; y < box.y1; y++) {
+                for (let x = box.x0; x < box.x1; x++) {
+                    if (map[y * w + x]) p[axis === 'x' ? x : y]++;
+                }
+            }
+            return p;
+        }
+
+        function peakNear(p, pos) {
+            const k = Math.round(pos);
+            return Math.max(p[k - 1] || 0, p[k] || 0, p[k + 1] || 0);
+        }
+
+        // Whole-pixel line spacing from autocorrelation (first strong peak, so doubles are skipped)
+        function roughPitch(p, a, b) {
+            const len = b - a;
+            let mean = 0;
+            for (let i = a; i < b; i++) mean += p[i];
+            mean /= len;
+            const q = new Float32Array(len);
+            let energy = 0;
+            for (let i = 0; i < len; i++) { q[i] = p[a + i] - mean; energy += q[i] * q[i]; }
+            if (!energy) return null;
+            const r = [];
+            const maxL = Math.floor(len / 3);
+            for (let L = 4; L <= maxL; L++) {
+                let s = 0;
+                for (let i = 0; i + L < len; i++) s += q[i] * q[i + L];
+                r[L] = s / energy;
+            }
+            let maxR = -Infinity;
+            for (let L = 4; L <= maxL; L++) if (r[L] > maxR) maxR = r[L];
+            if (!(maxR > 0.1)) return null;
+            for (let L = 5; L < maxL; L++) {
+                if (r[L] >= r[L - 1] && r[L] >= r[L + 1] && r[L] >= 0.6 * maxR) return L;
+            }
+            return null;
+        }
+
+        // Exact (sub-pixel) spacing and offset that best line up with the line peaks
+        function finePitch(p, a, b, rough) {
+            let best = { score: -1 };
+            for (let pitch = rough - 1; pitch <= rough + 1.001; pitch += 0.05) {
+                for (let o = 0; o < pitch; o += 0.5) {
+                    let s = 0;
+                    for (let x = a + o; x < b; x += pitch) s += peakNear(p, x);
+                    if (s > best.score) best = { score: s, pitch, phase: a + o };
+                }
+            }
+            return best;
+        }
+
+        // Where the grid is along one axis: the positions crossed by many of the candidate lines.
+        // axis 'x' = vertical lines at x = lines[], measured for every row.
+        function gridSpan(map, w, h, axis, lines, crossPitch) {
+            const len = axis === 'x' ? h : w;
+            const lineLen = axis === 'x' ? w : h;
+            const cov = new Float32Array(len);
+            for (let t = 0; t < len; t++) {
+                let c = 0;
+                for (const pos of lines) {
+                    const k = Math.round(pos);
+                    for (let d = -1; d <= 1; d++) {
+                        const u = k + d;
+                        if (u < 0 || u >= lineLen) continue;
+                        if (map[axis === 'x' ? t * w + u : u * w + t]) { c++; break; }
+                    }
+                }
+                cov[t] = c;
+            }
+            const sorted = Array.from(cov).sort((x, y) => y - x);
+            const ref = sorted[Math.floor(len * 0.05)] || sorted[0];
+            if (ref < 3) return null;
+            // Longest stretch with good coverage; crossing (and thick) lines leave short gaps
+            const maxGap = Math.max(4, Math.round(crossPitch * 0.3));
+            let best = null, start = -1, lastOn = -1;
+            for (let t = 0; t < len; t++) {
+                if (cov[t] >= ref * 0.45) {
+                    if (start < 0 || t - lastOn > maxGap) start = t;
+                    lastOn = t;
+                    if (!best || lastOn - start > best[1] - best[0]) best = [start, lastOn];
+                }
+            }
+            return best ? { from: best[0], to: best[1] } : null;
+        }
+
+        // Snap a span to the nearest grid lines, then refine with a straight-line fit
+        function fitGridLines(p, pitch, phase, from, to) {
+            const kFrom = Math.round((from - phase) / pitch), kTo = Math.round((to - phase) / pitch);
+            const ks = [], xs = [];
+            for (let k = kFrom; k <= kTo; k++) {
+                const expected = Math.round(phase + k * pitch);
+                let bx = expected, bv = -1;
+                for (let d = -2; d <= 2; d++) {
+                    if ((p[expected + d] || 0) > bv) { bv = p[expected + d] || 0; bx = expected + d; }
+                }
+                ks.push(k);
+                xs.push(bx);
+            }
+            const n = ks.length;
+            if (n < 3) return null;
+            const mk = ks.reduce((s, v) => s + v, 0) / n, mx = xs.reduce((s, v) => s + v, 0) / n;
+            let num = 0, den = 0;
+            ks.forEach((k, i) => { num += (k - mk) * (xs[i] - mx); den += (k - mk) ** 2; });
+            const fitted = num / den;
+            return { start: mx + (ks[0] - mk) * fitted, end: mx + (ks[n - 1] - mk) * fitted, count: n - 1 };
         }
 
         // A grid-line pixel is gray or black (dark enough, little color)
